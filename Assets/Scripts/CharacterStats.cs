@@ -1,0 +1,121 @@
+using System;
+using UnityEngine;
+
+/// <summary>
+/// キャラクター1体分のステータスを保持するクラス。
+/// GameManager経由でシーンをまたいで保持される。
+///
+/// 設計書(オリサモ企画書)の以下の仕様に対応：
+/// ・6属性によるダメージ増減(相性)
+/// ・イラスト解析によるステータス自動生成(現状は乱数で代替)
+/// ・他ステータスを参照するスキルの自動生成
+/// ・「突然変異」によるレアカード出現
+/// </summary>
+[Serializable]
+public class CharacterStats
+{
+    public string characterName;
+
+    // 基本ステータス
+    public int attack;   // 攻撃力
+    public int defense;  // 防御力
+    public int speed;    // 素早さ
+    public int hp;        // 現在HP
+    public int maxHp;     // 最大HP(回復時の上限として使用)
+
+    // 属性・スキル
+    public ElementType element;
+    public CharacterSkill skill;
+
+    // 突然変異(レアカード)かどうか
+    public bool isMutation;
+
+    private const float MutationChance = 0.05f;   // 突然変異の発生確率(5%)
+    private const float MutationMultiplier = 1.5f; // 突然変異時のステータス倍率
+
+    public CharacterStats(string name)
+    {
+        characterName = name;
+        maxHp = 100;
+        hp = maxHp;
+    }
+
+    /// <summary>
+    /// ステータス・属性・スキルをすべてランダムに割り振る。
+    /// 将来的にはここをAI画像解析の結果を使って算出するロジックに差し替える想定。
+    /// </summary>
+    public void AssignRandomStats()
+    {
+        attack = UnityEngine.Random.Range(10, 31);
+        defense = UnityEngine.Random.Range(5, 21);
+        speed = UnityEngine.Random.Range(5, 21);
+        maxHp = 100;
+        hp = maxHp;
+
+        // 6属性からランダムに1つ決定
+        int elementCount = Enum.GetValues(typeof(ElementType)).Length;
+        element = (ElementType)UnityEngine.Random.Range(0, elementCount);
+
+        // 他ステータスを参照するスキルをランダムに生成
+        int skillCount = Enum.GetValues(typeof(SkillType)).Length;
+        SkillType randomSkillType = (SkillType)UnityEngine.Random.Range(0, skillCount);
+        float ratio = UnityEngine.Random.Range(0.2f, 0.5f);
+        skill = new CharacterSkill(randomSkillType, ratio);
+
+        // 突然変異(レアカード)判定
+        isMutation = UnityEngine.Random.value < MutationChance;
+        if (isMutation)
+        {
+            ApplyMutation();
+        }
+    }
+
+    /// <summary>
+    /// 突然変異発生時、ランダムな1ステータスを大幅強化する。
+    /// </summary>
+    private void ApplyMutation()
+    {
+        int roll = UnityEngine.Random.Range(0, 3);
+        switch (roll)
+        {
+            case 0: attack = Mathf.RoundToInt(attack * MutationMultiplier); break;
+            case 1: defense = Mathf.RoundToInt(defense * MutationMultiplier); break;
+            case 2: speed = Mathf.RoundToInt(speed * MutationMultiplier); break;
+        }
+        characterName = "★" + characterName; // レアカードの目印
+    }
+
+    /// <summary>
+    /// スキル(PowerBoost)を加味した実質攻撃力。バトル時のダメージ計算に使用。
+    /// </summary>
+    public int GetEffectiveAttack()
+    {
+        int value = attack;
+        if (skill != null && skill.skillType == SkillType.PowerBoost)
+        {
+            value += Mathf.RoundToInt(speed * skill.ratio);
+        }
+        return value;
+    }
+
+    /// <summary>
+    /// スキル(GuardBoost)を加味した実質防御力。バトル時のダメージ計算に使用。
+    /// </summary>
+    public int GetEffectiveDefense()
+    {
+        int value = defense;
+        if (skill != null && skill.skillType == SkillType.GuardBoost)
+        {
+            value += Mathf.RoundToInt(speed * skill.ratio);
+        }
+        return value;
+    }
+
+    public override string ToString()
+    {
+        string mutationTag = isMutation ? "[突然変異] " : "";
+        return $"{mutationTag}{characterName}\n" +
+               $"属性:{element}  ATK:{attack} DEF:{defense} SPD:{speed} HP:{hp}\n" +
+               $"スキル「{skill.skillName}」:{skill.GetDescription()}";
+    }
+}
