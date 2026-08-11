@@ -750,7 +750,7 @@ MonoBehaviour:
   messageText: {fileID: 944573945}
   modelSpawnPoint: {fileID: 0}
   characterModelPrefab: {fileID: 0}
-  saveScannedCharacterToGameManager: 0
+  saveScannedCharacterToGameManager: 1
 --- !u!4 &1372067749
 Transform:
   m_ObjectHideFlags: 0
