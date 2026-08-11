@@ -1,12 +1,13 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using UnityEngine.UI; に変更してください
 
 /// <summary>
 /// キャラクター作成シーンの制御。
 /// スペースキーを押すとキャラクターが生成され、ステータスが自動で割り振られ、
-/// GameManagerに保存される。同時に3Dオブジェクト（現在は仮のプリミティブ）を表示する。
-/// その後バトルシーンへ遷移する。
+/// GameManagerに保存される。同時に3Dオブジェクト（現在は仮のプリミティブ）と
+/// QRコード（ZXing.Net導入時のみ）を表示する。その後バトルシーンへ遷移する。
 ///
 /// 【セットアップ方法】
 /// 1. キャラクター作成シーンに空のGameObjectを作成し、このスクリプトをアタッチ
@@ -17,7 +18,9 @@ using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using 
 ///    未設定の場合、属性ごとに色分けされた仮のカプセルが自動生成される。
 ///    後日、実際のキャラクターモデルのプレハブが用意できたら
 ///    ここにドラッグするだけで表示物が差し替わる。
-/// 5. Build Settingsに "Battle" という名前のシーンを追加しておく
+/// 5. QRコードを表示したい場合は、Canvas上にRawImageを配置し qrCodeImage にドラッグ
+///    （ZXing.Net未導入の場合はログに警告が出るだけで、他の機能は問題なく動作します）
+/// 6. Build Settingsに "Battle" という名前のシーンを追加しておく
 /// </summary>
 public class CharacterCreationManager : MonoBehaviour
 {
@@ -39,6 +42,13 @@ public class CharacterCreationManager : MonoBehaviour
 
     [Tooltip("キャラクターモデルのプレハブ。未設定の場合は仮の3Dプリミティブ（カプセル）を表示する")]
     [SerializeField] private GameObject characterModelPrefab;
+
+    [Header("QRコード表示（カード印刷を見据えた確認用）")]
+    [Tooltip("生成したQRコードを表示するRawImage（任意。未設定ならQR生成自体をスキップ）")]
+    [SerializeField] private RawImage qrCodeImage;
+
+    [Tooltip("QRコードの画像サイズ（ピクセル）")]
+    [SerializeField] private int qrCodeSize = 512;
 
     private bool isCharacterCreated = false;
     private GameObject spawnedModelInstance;
@@ -86,72 +96,40 @@ public class CharacterCreationManager : MonoBehaviour
         // 4. 3Dオブジェクトを表示（現在は仮のプリミティブ、将来はキャラクターモデルに差し替え）
         SpawnCharacterModel(newCharacter);
 
-        // 5. 少し待ってからバトルシーンへ遷移
+        // 5. QRコードを生成して表示（カード印刷前の確認用。ZXing.Net導入時のみ実際に生成される）
+        GenerateAndDisplayQRCode(newCharacter);
+
+        // 6. 少し待ってからバトルシーンへ遷移
         Invoke(nameof(GoToBattleScene), delayBeforeSceneChange);
     }
 
     /// <summary>
-    /// キャラクターの3Dオブジェクトを生成して表示する。
-    /// characterModelPrefab が設定されていればそれを使用（＝本番のキャラクターモデル差し替え口）。
-    /// 未設定の場合は、属性に応じて色分けした仮のカプセルを表示する。
+    /// キャラクターの3Dオブジェクトを表示する（共通処理はCharacterModelUtilityに委譲）。
     /// </summary>
     private void SpawnCharacterModel(CharacterStats stats)
     {
-        // 既に表示中のモデルがあれば削除（再生成に備えて）
-        if (spawnedModelInstance != null)
-        {
-            Destroy(spawnedModelInstance);
-        }
-
-        Vector3 spawnPosition = modelSpawnPoint != null ? modelSpawnPoint.position : Vector3.zero;
-        Quaternion spawnRotation = modelSpawnPoint != null ? modelSpawnPoint.rotation : Quaternion.identity;
-
-        if (characterModelPrefab != null)
-        {
-            // 【将来ここが本番のキャラクターモデルに差し替わる想定】
-            spawnedModelInstance = Instantiate(characterModelPrefab, spawnPosition, spawnRotation, modelSpawnPoint);
-        }
-        else
-        {
-            // プレハブ未設定時は仮の3Dプリミティブ（カプセル）を表示
-            spawnedModelInstance = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            spawnedModelInstance.transform.SetPositionAndRotation(spawnPosition, spawnRotation);
-            if (modelSpawnPoint != null)
-            {
-                spawnedModelInstance.transform.SetParent(modelSpawnPoint);
-            }
-
-            // 属性に応じて色を変える（仮の見た目分け）
-            Renderer renderer = spawnedModelInstance.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                renderer.material.color = GetElementColor(stats.element);
-            }
-        }
-
-        spawnedModelInstance.name = "CharacterModel_" + stats.characterName;
-
-        // ゆっくり回転させてお披露目感を出す（任意の演出。不要であれば削除可）
-        if (spawnedModelInstance.GetComponent<SimpleRotator>() == null)
-        {
-            spawnedModelInstance.AddComponent<SimpleRotator>();
-        }
+        spawnedModelInstance = CharacterModelUtility.SpawnModel(stats, modelSpawnPoint, characterModelPrefab, spawnedModelInstance);
     }
 
     /// <summary>
-    /// 属性ごとの仮の表示色。実際のカラーパレットが決まったら調整してください。
+    /// キャラクターのステータスをJSON化し、QRコード画像として表示する。
+    /// この文字列がそのまま、将来カードに印刷するQRコードの中身になる想定。
+    /// ZXing.Net未導入の場合はコンソールに警告が出るのみで、他の処理には影響しない。
     /// </summary>
-    private Color GetElementColor(ElementType element)
+    private void GenerateAndDisplayQRCode(CharacterStats stats)
     {
-        switch (element)
+        if (qrCodeImage == null)
         {
-            case ElementType.Fire: return new Color(0.9f, 0.3f, 0.2f);
-            case ElementType.Wind: return new Color(0.4f, 0.8f, 0.4f);
-            case ElementType.Thunder: return new Color(0.95f, 0.85f, 0.2f);
-            case ElementType.Water: return new Color(0.2f, 0.5f, 0.9f);
-            case ElementType.Earth: return new Color(0.6f, 0.4f, 0.2f);
-            case ElementType.Light: return new Color(0.95f, 0.95f, 0.85f);
-            default: return Color.white;
+            return; // QR表示を使わない構成
+        }
+
+        string json = stats.ToJson();
+        Texture2D qrTexture = QRCodeGenerator.GenerateTexture(json, qrCodeSize);
+
+        if (qrTexture != null)
+        {
+            qrCodeImage.texture = qrTexture;
+            qrCodeImage.gameObject.SetActive(true);
         }
     }
 

@@ -26,6 +26,11 @@ public class CharacterSkill
     [Range(0.1f, 0.6f)]
     public float ratio; // 参照するステータスに対する倍率(20%〜50%程度を想定)
 
+    /// <summary>
+    /// JsonUtilityでの復元(QRコード読み取り時)に必要なパラメータ無しコンストラクタ。
+    /// </summary>
+    public CharacterSkill() { }
+
     public CharacterSkill(SkillType type, float ratio)
     {
         this.skillType = type;

@@ -30,10 +30,23 @@ public class CharacterStats
     // 突然変異(レアカード)かどうか
     public bool isMutation;
 
+    /// <summary>
+    /// QRコードのデータ形式バージョン。
+    /// 将来ステータス構造(属性やスキルの種類など)を変更した際に、
+    /// 古いカードのQRを読んだ時の互換性チェックに使用する。
+    /// </summary>
+    public const int CurrentDataVersion = 1;
+    public int dataVersion = CurrentDataVersion;
+
     private const float MutationChance = 0.05f;   // 突然変異の発生確率(5%)
     private const float MutationMultiplier = 1.5f; // 突然変異時のステータス倍率
 
-    public CharacterStats(string name)
+    /// <summary>
+    /// JsonUtilityでの復元(QRコード読み取り時)に必要なパラメータ無しコンストラクタ。
+    /// </summary>
+    public CharacterStats() { }
+
+    public CharacterStats(string name) : this()
     {
         characterName = name;
         maxHp = 100;
@@ -117,5 +130,47 @@ public class CharacterStats
         return $"{mutationTag}{characterName}\n" +
                $"属性:{element}  ATK:{attack} DEF:{defense} SPD:{speed} HP:{hp}\n" +
                $"スキル「{skill.skillName}」:{skill.GetDescription()}";
+    }
+
+    /// <summary>
+    /// カード印刷用QRコードに埋め込むJSON文字列に変換する。
+    /// </summary>
+    public string ToJson()
+    {
+        return JsonUtility.ToJson(this);
+    }
+
+    /// <summary>
+    /// QRコードから読み取ったJSON文字列をCharacterStatsに変換する。
+    /// 形式が不正な場合はnullを返す(呼び出し側でnullチェックを行うこと)。
+    /// </summary>
+    public static CharacterStats FromJson(string json)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            CharacterStats stats = JsonUtility.FromJson<CharacterStats>(json);
+
+            if (stats == null || string.IsNullOrEmpty(stats.characterName))
+            {
+                return null;
+            }
+
+            if (stats.dataVersion > CurrentDataVersion)
+            {
+                Debug.LogWarning($"未知のデータバージョンです(dataVersion:{stats.dataVersion})。読み取り結果が正しく表示されない可能性があります。");
+            }
+
+            return stats;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("QRコードのデータ解析に失敗しました: " + e.Message);
+            return null;
+        }
     }
 }
