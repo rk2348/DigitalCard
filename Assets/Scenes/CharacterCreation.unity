@@ -359,7 +359,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CharacterCreationManager
   newCharacterName: "\u30D7\u30EC\u30A4\u30E4\u30FC"
   statusText: {fileID: 1550767443}
-  delayBeforeSceneChange: 1.5
+  delayBeforeSceneChange: 10
   battleSceneName: Battle
   modelSpawnPoint: {fileID: 1636386227}
   characterModelPrefab: {fileID: 2058308523696403046, guid: b664b11c3df1a4a42949c33549c43e40, type: 3}
@@ -517,8 +517,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -0.0050661, y: -540}
-  m_SizeDelta: {x: 3840, y: 1080}
+  m_AnchoredPosition: {x: -540, y: 0}
+  m_SizeDelta: {x: 2760, y: 2160}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1550767443
 MonoBehaviour:
@@ -575,7 +575,7 @@ MonoBehaviour:
   m_fontSizeMax: 72
   m_fontStyle: 0
   m_HorizontalAlignment: 2
-  m_VerticalAlignment: 512
+  m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
   m_characterHorizontalScale: 1
@@ -629,6 +629,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1636386227}
+  - component: {fileID: 1636386228}
   m_Layer: 0
   m_Name: GameObject
   m_TagString: Untagged
@@ -651,6 +652,19 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1636386228
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1636386226}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0e76e66bbc5ceac439c37eb15d8f3730, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ReturnToTitleOnEscape
+  titleSceneName: Title
 --- !u!1 &1684259217
 GameObject:
   m_ObjectHideFlags: 0
