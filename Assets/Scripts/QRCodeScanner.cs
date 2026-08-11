@@ -9,35 +9,6 @@ using ZXing;
 using ZXing.Common;
 #endif
 
-/// <summary>
-/// デバイスのカメラを使ってQRコードをリアルタイムでスキャンするコンポーネント。
-/// 読み取りに成功すると OnQRCodeScanned イベントでテキストを通知する。
-///
-/// 「カメラが正しく映っているか確認する画面」として、以下を備えている：
-/// ・カメラ映像のプレビュー表示（向き・縦横比を実機に合わせて自動補正）
-/// ・カメラの状態テキスト（起動中／カメラが見つからない／スキャン中／読み取り成功）
-/// ・QRコードを検出した瞬間に光る枠（任意）
-///
-/// 【必要な準備】
-/// 1. ZXing.Net（QR/バーコード読み取りライブラリ）をプロジェクトに導入
-///    （NuGetForUnity経由、または zxing.unity 系の .unitypackage を利用）
-/// 2. Edit > Project Settings > Player > Scripting Define Symbols に
-///    "ORISAMO_ZXING" を追加する
-///    ※ 未追加の場合、実機カメラは起動するがQRの解析は行われず、
-///       代わりに下記の「開発用テスト機能」でUIの動作確認ができる
-/// 3. Android/iOSで実機ビルドする場合はカメラ権限の設定を忘れずに
-///    （Player Settings > Android/iOS > Camera Usage Description 等）
-///
-/// 【セットアップ方法】
-/// 1. シーンに空のGameObjectを作成し、このスクリプトをアタッチ
-/// 2. カメラ映像をプレビュー表示するため、Canvas上にRawImageを配置し
-///    previewImage にドラッグ
-///    ・映像が伸び縮みして見える場合は、RawImageに AspectRatioFitter
-///      コンポーネントを追加してください（自動でアスペクト比を設定します）
-/// 3. （任意）カメラの状態を表示するTextMeshProUGUIを配置し cameraStatusText にドラッグ
-/// 4. （任意）QRコードを検出した瞬間に色を変えて知らせたい場合、
-///    プレビューの周りに枠用のImageを配置し scanIndicatorImage にドラッグ
-/// </summary>
 public class QRCodeScanner : MonoBehaviour
 {
     [Header("カメラ確認画面")]
