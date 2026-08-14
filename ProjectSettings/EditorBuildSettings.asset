@@ -9,7 +9,7 @@ EditorBuildSettings:
     path: Assets/Scenes/Title.unity
     guid: 99c9720ab356a0642a771bea13969a05
   - enabled: 1
-    path: Assets/Scenes/CharacterCreation.unity
+    path: Assets/Scenes/QRCreation.unity
     guid: e95af890aabb59040949742d09101b57
   - enabled: 1
     path: Assets/Scenes/Battle.unity
