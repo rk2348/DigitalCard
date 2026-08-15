@@ -290,7 +290,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 1380, y: 540}
+  m_AnchoredPosition: {x: 1380, y: 0}
   m_SizeDelta: {x: 1080, y: 1080}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &322265468
@@ -357,14 +357,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 42e8be80962df39479aa41895a9f507a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CharacterCreationManager
-  newCharacterName: "\u30D7\u30EC\u30A4\u30E4\u30FC"
   statusText: {fileID: 1550767443}
-  delayBeforeSceneChange: 10
-  battleSceneName: Battle
-  modelSpawnPoint: {fileID: 1636386227}
-  characterModelPrefab: {fileID: 2058308523696403046, guid: b664b11c3df1a4a42949c33549c43e40, type: 3}
   qrCodeImage: {fileID: 322265468}
   qrCodeSize: 512
+  inputCooldown: 0.5
 --- !u!4 &536813978
 Transform:
   m_ObjectHideFlags: 0
@@ -575,7 +571,7 @@ MonoBehaviour:
   m_fontSizeMax: 72
   m_fontStyle: 0
   m_HorizontalAlignment: 2
-  m_VerticalAlignment: 256
+  m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
   m_characterHorizontalScale: 1

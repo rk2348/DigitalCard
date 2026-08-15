@@ -99,6 +99,58 @@ public class CharacterStats
     }
 
     /// <summary>
+    /// 【QRコード運用の変更に伴い追加】
+    /// 指定したseed値をもとにステータス・属性・スキルを決定する。
+    /// QRコード作成時点ではキャラクターの中身を一切決めず、QRコードには
+    /// このseed値だけを埋め込んでおき、QRコードを読み取った瞬間に初めて
+    /// このメソッドでキャラクターの中身を確定させる、という流れを想定している。
+    /// 同じseedからは常に同じ結果が再現される(UnityEngine.Randomのグローバルな
+    /// 状態には影響を与えないよう、System.Randomを使用している)。
+    /// characterNameは事前にコンストラクタ等で設定しておくこと(このメソッドでは変更しない。
+    /// ただし突然変異が発生した場合は先頭に「★」が付与される)。
+    /// </summary>
+    public void AssignRandomStats(int seed)
+    {
+        System.Random rng = new System.Random(seed);
+
+        attack = rng.Next(10, 31);
+        defense = rng.Next(5, 21);
+        speed = rng.Next(5, 21);
+        maxHp = 100;
+        hp = maxHp;
+
+        // 6属性からランダムに1つ決定
+        int elementCount = Enum.GetValues(typeof(ElementType)).Length;
+        element = (ElementType)rng.Next(0, elementCount);
+
+        // 他ステータスを参照するスキルをランダムに生成
+        int skillCount = Enum.GetValues(typeof(SkillType)).Length;
+        SkillType randomSkillType = (SkillType)rng.Next(0, skillCount);
+        float ratio = 0.2f + (float)rng.NextDouble() * 0.3f; // 0.2〜0.5の範囲
+        skill = new CharacterSkill(randomSkillType, ratio);
+
+        // 突然変異(レアカード)判定
+        isMutation = rng.NextDouble() < MutationChance;
+        if (isMutation)
+        {
+            ApplyMutation(rng);
+        }
+    }
+
+    /// <summary>AssignRandomStats(int seed) 用。System.Randomを使うバージョン。</summary>
+    private void ApplyMutation(System.Random rng)
+    {
+        int roll = rng.Next(0, 3);
+        switch (roll)
+        {
+            case 0: attack = Mathf.RoundToInt(attack * MutationMultiplier); break;
+            case 1: defense = Mathf.RoundToInt(defense * MutationMultiplier); break;
+            case 2: speed = Mathf.RoundToInt(speed * MutationMultiplier); break;
+        }
+        characterName = "★" + characterName; // レアカードの目印
+    }
+
+    /// <summary>
     /// スキル(PowerBoost)を加味した実質攻撃力。バトル時のダメージ計算に使用。
     /// </summary>
     public int GetEffectiveAttack()

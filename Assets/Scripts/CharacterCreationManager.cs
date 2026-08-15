@@ -1,129 +1,101 @@
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using UnityEngine.UI; に変更してください
 
 /// <summary>
-/// キャラクター作成シーンの制御。
-/// スペースキーを押すとキャラクターが生成され、ステータスが自動で割り振られ、
-/// GameManagerに保存される。同時に3Dオブジェクト（現在は仮のプリミティブ）と
-/// QRコード（ZXing.Net導入時のみ）を表示する。その後バトルシーンへ遷移する。
+/// QRコード作成シーンの制御（開発者用／カード印刷用）。
+///
+/// 【重要な変更点】
+/// 以前はここでキャラクターの名前・ステータス・属性・スキルをすべて決定し、
+/// その内容をそのままQRコードに埋め込んでいた。
+/// 今回、「QRコード作成時点ではキャラクターの中身を一切決めず、QRコードを
+/// 読み取った瞬間（QRScanシーン側）に初めて決定する」という仕様に変更したため、
+/// このシーンでは
+///   ・カードを一意に識別するID
+///   ・ステータス生成用のシード値
+/// の2つだけ（QRCardData）をQRコードに埋め込む。キャラクターの中身は
+/// 完全に伏せられたまま、QRコードだけが生成される。
 ///
 /// 【セットアップ方法】
-/// 1. キャラクター作成シーンに空のGameObjectを作成し、このスクリプトをアタッチ
-/// 2. ステータス表示用のTextMeshProUGUIをCanvas上に配置し、statusText にドラッグ
-/// 3. 3Dモデルを表示したい位置に空のGameObject（例："ModelSpawnPoint"）を配置し、
-///    modelSpawnPoint にドラッグ（カメラが映せる位置に置いてください）
-/// 4. characterModelPrefab は現時点では未設定でOK。
-///    未設定の場合、属性ごとに色分けされた仮のカプセルが自動生成される。
-///    後日、実際のキャラクターモデルのプレハブが用意できたら
-///    ここにドラッグするだけで表示物が差し替わる。
-/// 5. QRコードを表示したい場合は、Canvas上にRawImageを配置し qrCodeImage にドラッグ
+/// 1. このシーンに空のGameObjectを作成し、このスクリプトをアタッチ
+/// 2. カード生成の確認メッセージを出したい場合はCanvas上にTextMeshProUGUIを配置し
+///    statusText にドラッグ（任意）
+/// 3. QRコードを表示したい場合は、Canvas上にRawImageを配置し qrCodeImage にドラッグ
 ///    （ZXing.Net未導入の場合はログに警告が出るだけで、他の機能は問題なく動作します）
-/// 6. Build Settingsに "Battle" という名前のシーンを追加しておく
+/// 4. スペースキーを押すたびに新しいカード（QRコード）が1枚生成されます。
+///    印刷したい枚数分、繰り返しスペースキーを押してください
+///    （中身は伏せられたままなので、そのまま何枚でも量産できます）。
 /// </summary>
 public class CharacterCreationManager : MonoBehaviour
 {
-    [Tooltip("生成されるキャラクターの名前（必要であれば入力欄と連携させてください）")]
-    [SerializeField] private string newCharacterName = "プレイヤー";
-
-    [Tooltip("ステータス表示用のUIテキスト（任意）")]
+    [Tooltip("カード生成結果を表示するUIテキスト（任意）")]
     [SerializeField] private TextMeshProUGUI statusText;
 
-    [Tooltip("バトルシーンへの遷移までの待機時間（秒）")]
-    [SerializeField] private float delayBeforeSceneChange = 1.5f;
-
-    [Tooltip("遷移先シーン名（Build Settingsに登録されているもの）")]
-    [SerializeField] private string battleSceneName = "Battle";
-
-    [Header("3Dモデル表示（後でキャラクターモデルに差し替え予定）")]
-    [Tooltip("3Dオブジェクトを表示する位置・回転の基準にするTransform")]
-    [SerializeField] private Transform modelSpawnPoint;
-
-    [Tooltip("キャラクターモデルのプレハブ。未設定の場合は仮の3Dプリミティブ（カプセル）を表示する")]
-    [SerializeField] private GameObject characterModelPrefab;
-
-    [Header("QRコード表示（カード印刷を見据えた確認用）")]
-    [Tooltip("生成したQRコードを表示するRawImage（任意。未設定ならQR生成自体をスキップ）")]
+    [Header("QRコード表示（カード印刷用）")]
+    [Tooltip("生成したQRコードを表示するRawImage（未設定ならQR生成自体をスキップ）")]
     [SerializeField] private RawImage qrCodeImage;
 
     [Tooltip("QRコードの画像サイズ（ピクセル）")]
     [SerializeField] private int qrCodeSize = 512;
 
-    private bool isCharacterCreated = false;
-    private GameObject spawnedModelInstance;
+    [Tooltip("連続でスペースキーを押した際に同じ操作が何度も走らないようにするクールダウン（秒）")]
+    [SerializeField] private float inputCooldown = 0.5f;
+
+    private float cooldownTimer = 0f;
 
     private void Update()
     {
-        // まだキャラクターが作成されていない場合のみスペースキーを受け付ける
-        if (!isCharacterCreated && Input.GetKeyDown(KeyCode.Space))
+        if (cooldownTimer > 0f)
         {
-            CreateCharacter();
+            cooldownTimer -= Time.deltaTime;
+            return;
+        }
+
+        if (Input.GetKeyDown(KeyCode.Space))
+        {
+            CreateCard();
         }
     }
 
-    private void CreateCharacter()
+    /// <summary>
+    /// 新しいカード（QRコード）を1枚作成する。
+    /// キャラクターの中身（名前・ステータス・属性・スキル）はここでは一切決めない。
+    /// 決めるのはあくまで「カードID」と「ステータス生成用のシード値」だけ。
+    /// </summary>
+    private void CreateCard()
     {
-        isCharacterCreated = true;
+        cooldownTimer = inputCooldown;
 
-        // 1. キャラクターを生成し、ステータスをランダムに割り振る
-        CharacterStats newCharacter = new CharacterStats(newCharacterName);
-        newCharacter.AssignRandomStats();
+        // カードを一意に識別するID（印刷管理用。ゲームロジックには使わない）
+        string cardId = System.Guid.NewGuid().ToString("N");
 
-        // 2. GameManagerに保存する（シーンをまたいでも保持される）
-        if (GameManager.Instance != null)
-        {
-            GameManager.Instance.SavePlayerCharacter(newCharacter);
-        }
-        else
-        {
-            Debug.LogError("GameManagerが見つかりません。タイトルシーンにGameManagerを配置してください。");
-        }
+        // ステータス生成用のシード値。QRコードを読み取った瞬間、この値を使って
+        // CharacterStats.AssignRandomStats(seed) が呼ばれ、初めて中身が決まる。
+        int seed = UnityEngine.Random.Range(int.MinValue, int.MaxValue);
 
-        // 3. 画面にステータスを表示（UIがあれば）
+        QRCardData cardData = new QRCardData(cardId, seed);
+
         if (statusText != null)
         {
-            string mutationHeader = newCharacter.isMutation ? "★突然変異が発生した！★\n" : "";
-            statusText.text =
-                $"{mutationHeader}{newCharacter.characterName} が誕生した！\n\n" +
-                $"属性: {newCharacter.element}\n" +
-                $"攻撃力: {newCharacter.attack}\n" +
-                $"防御力: {newCharacter.defense}\n" +
-                $"素早さ: {newCharacter.speed}\n\n" +
-                $"スキル「{newCharacter.skill.skillName}」\n{newCharacter.skill.GetDescription()}";
+            statusText.text = $"カードを生成しました\nID: {cardId}\n\n（中身はQRコードを読み取るまでのお楽しみ！）";
         }
 
-        // 4. 3Dオブジェクトを表示（現在は仮のプリミティブ、将来はキャラクターモデルに差し替え）
-        SpawnCharacterModel(newCharacter);
-
-        // 5. QRコードを生成して表示（カード印刷前の確認用。ZXing.Net導入時のみ実際に生成される）
-        GenerateAndDisplayQRCode(newCharacter);
-
-        // 6. 少し待ってからバトルシーンへ遷移
-        Invoke(nameof(GoToBattleScene), delayBeforeSceneChange);
+        GenerateAndDisplayQRCode(cardData);
     }
 
     /// <summary>
-    /// キャラクターの3Dオブジェクトを表示する（共通処理はCharacterModelUtilityに委譲）。
-    /// </summary>
-    private void SpawnCharacterModel(CharacterStats stats)
-    {
-        spawnedModelInstance = CharacterModelUtility.SpawnModel(stats, modelSpawnPoint, characterModelPrefab, spawnedModelInstance);
-    }
-
-    /// <summary>
-    /// キャラクターのステータスをJSON化し、QRコード画像として表示する。
-    /// この文字列がそのまま、将来カードに印刷するQRコードの中身になる想定。
+    /// カード情報（ID・シード値のみ）をJSON化し、QRコード画像として表示する。
+    /// この文字列がそのまま、カードに印刷するQRコードの中身になる。
     /// ZXing.Net未導入の場合はコンソールに警告が出るのみで、他の処理には影響しない。
     /// </summary>
-    private void GenerateAndDisplayQRCode(CharacterStats stats)
+    private void GenerateAndDisplayQRCode(QRCardData cardData)
     {
         if (qrCodeImage == null)
         {
             return; // QR表示を使わない構成
         }
 
-        string json = stats.ToJson();
+        string json = cardData.ToJson();
         Texture2D qrTexture = QRCodeGenerator.GenerateTexture(json, qrCodeSize);
 
         if (qrTexture != null)
@@ -131,10 +103,5 @@ public class CharacterCreationManager : MonoBehaviour
             qrCodeImage.texture = qrTexture;
             qrCodeImage.gameObject.SetActive(true);
         }
-    }
-
-    private void GoToBattleScene()
-    {
-        SceneManager.LoadScene(battleSceneName);
     }
 }

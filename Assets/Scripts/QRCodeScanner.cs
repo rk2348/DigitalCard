@@ -45,8 +45,7 @@ public class QRCodeScanner : MonoBehaviour
     [TextArea(3, 6)]
     [SerializeField]
     private string debugScanJson =
-        "{\"characterName\":\"テストキャラ\",\"attack\":22,\"defense\":14,\"speed\":19,\"hp\":100,\"maxHp\":100," +
-        "\"element\":0,\"skill\":{\"skillName\":\"疾風の一撃\",\"skillType\":0,\"ratio\":0.3},\"isMutation\":false}";
+        "{\"cardId\":\"debug-test-card\",\"seed\":12345,\"dataVersion\":1}";
 #endif
 
     /// <summary>QRコードのデコードに成功した時に発火（引数は読み取った文字列）</summary>
