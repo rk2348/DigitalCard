@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>オリサモ カードスキャン</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>オリサモ カードスキャン</h1>
+
+    <div id="server-setup">
+      <label for="server-url">Unityサーバーのアドレス</label>
+      <input type="text" id="server-url" placeholder="http://192.168.1.10:8080" />
+      <button id="save-server-btn">保存してスキャン開始</button>
+      <p class="hint">
+        パソコンでUnity（QRScanシーン）を起動すると画面にアドレスが表示されます。<br />
+        それをそのまま入力してください。一度保存すれば次回から入力不要です。
+      </p>
+    </div>
+
+    <div id="reader"></div>
+
+    <div id="status" class="status">サーバーのアドレスを設定してください</div>
+  </div>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

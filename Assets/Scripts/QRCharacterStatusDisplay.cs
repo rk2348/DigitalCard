@@ -3,10 +3,9 @@ using UnityEngine.UI;
 using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using UnityEngine.UI; に変更してください
 
 /// <summary>
-/// QRコードスキャナー(QRCodeScanner)からの読み取り結果を受け取り、
-/// キャラクターを実際に生成してUIと3Dオブジェクトで表示する。
+/// QRコードの読み取り結果を受け取り、キャラクターを実際に生成してUIと3Dオブジェクトで表示する。
 ///
-/// 【重要な変更点】
+/// 【重要な変更点1】
 /// QRコードの中身は、以前は完成済みのキャラクターステータス(CharacterStats)の
 /// JSONそのものだったが、今回「カードID＋ステータス生成用シード値」(QRCardData)
 /// だけを埋め込む形式に変更した。
@@ -15,10 +14,19 @@ using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using 
 /// 入力してもらい、名前が確定した瞬間に CharacterStats.AssignRandomStats(seed)
 /// を呼んで初めてキャラクターの中身を確定させる。
 ///
+/// 【重要な変更点2】QRコードの読み取り方法が2種類使えるようになった
+/// A) PCのWebカメラで直接読み取る → QRCodeScanner.cs（従来どおり。開発・動作確認用）
+/// B) スマホのブラウザ（GitHub Pagesで公開したqr-scan-siteページ）で読み取り、
+///    Unity側で起動しているHTTPサーバー(QRWebServer.cs)へ送信してもらう → 本番運用向け
+/// どちらか一方でも、両方同時に有効にしてもよい。中身のJSON形式は共通(QRCardData)なので、
+/// このスクリプト側の処理(HandleQRCodeScanned)は完全に共通で動く。
+///
 /// 【セットアップ方法】
-/// 1. シーンに空のGameObjectを作成し、QRCodeScanner.cs をアタッチ（カメラ制御・QR解析）
+/// 1. シーンに空のGameObjectを作成し、使いたい方式に応じて QRCodeScanner.cs と/または
+///    QRWebServer.cs をアタッチ
 /// 2. 別の空のGameObjectを作成し、このスクリプトをアタッチ
-/// 3. Inspectorの qrCodeScanner に、手順1で作成したQRCodeScannerをドラッグ
+/// 3. Inspectorの qrCodeScanner / qrWebServer に、手順1で作成したコンポーネントをドラッグ
+///    （使わない方は空のままでOK）
 /// 4. 確定したキャラクターのステータス表示用の TextMeshProUGUI を Canvas 上に配置し
 ///    statusText にドラッグ
 /// 5. （任意）読み取り待ち/エラーメッセージ表示用の TextMeshProUGUI を messageText にドラッグ
@@ -36,8 +44,11 @@ using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using 
 /// </summary>
 public class QRCharacterStatusDisplay : MonoBehaviour
 {
-    [Tooltip("QRコードスキャナー（同一シーン内に配置したQRCodeScannerをドラッグ）")]
+    [Tooltip("QRコードスキャナー（PCのWebカメラで直接読み取る場合。使わないなら未設定でOK）")]
     [SerializeField] private QRCodeScanner qrCodeScanner;
+
+    [Tooltip("スマホのブラウザ（GitHub Pagesのスキャンページ）から送られてくる読み取り結果を受け取るサーバー（本番運用ではこちらを推奨）")]
+    [SerializeField] private QRWebServer qrWebServer;
 
     [Tooltip("確定したキャラクターのステータス表示先")]
     [SerializeField] private TextMeshProUGUI statusText;
@@ -81,9 +92,15 @@ public class QRCharacterStatusDisplay : MonoBehaviour
         {
             qrCodeScanner.OnQRCodeScanned += HandleQRCodeScanned;
         }
-        else
+
+        if (qrWebServer != null)
         {
-            Debug.LogError("QRCodeScannerが設定されていません。Inspectorでドラッグしてください。");
+            qrWebServer.OnCardJsonReceived += HandleQRCodeScanned;
+        }
+
+        if (qrCodeScanner == null && qrWebServer == null)
+        {
+            Debug.LogError("QRCodeScannerとQRWebServerのどちらも設定されていません。少なくとも一方をInspectorでドラッグしてください。");
         }
 
         if (confirmNameButton != null)
@@ -102,6 +119,11 @@ public class QRCharacterStatusDisplay : MonoBehaviour
         if (qrCodeScanner != null)
         {
             qrCodeScanner.OnQRCodeScanned -= HandleQRCodeScanned;
+        }
+
+        if (qrWebServer != null)
+        {
+            qrWebServer.OnCardJsonReceived -= HandleQRCodeScanned;
         }
 
         if (confirmNameButton != null)
@@ -125,11 +147,12 @@ public class QRCharacterStatusDisplay : MonoBehaviour
         {
             registerAgainButton.gameObject.SetActive(false);
         }
-        SetMessage("QRコードをカメラにかざしてください");
+        SetMessage("QRコードをスマホでスキャンしてください");
     }
 
     /// <summary>
-    /// QRコードの読み取りに成功した時に呼ばれる（QRCodeScannerのイベント経由）。
+    /// QRコードの読み取りに成功した時に呼ばれる
+    /// （QRCodeScanner.OnQRCodeScanned、またはQRWebServer.OnCardJsonReceived のイベント経由）。
     /// この時点ではまだカードID・シード値しか分からず、キャラクターの中身は未確定。
     /// </summary>
     private void HandleQRCodeScanned(string json)
@@ -227,7 +250,7 @@ public class QRCharacterStatusDisplay : MonoBehaviour
             registerAgainButton.gameObject.SetActive(false);
         }
 
-        SetMessage("QRコードをカメラにかざしてください");
+        SetMessage("QRコードをスマホでスキャンしてください");
     }
 
     private void DisplayStatus(CharacterStats stats)
