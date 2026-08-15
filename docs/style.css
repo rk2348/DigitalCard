@@ -83,3 +83,17 @@ h1 {
 .status.error {
   background: #a13a3a;
 }
+
+.debug-log {
+  display: none;
+  margin-top: 12px;
+  padding: 10px;
+  background: #0d0d1a;
+  color: #8f8;
+  font-size: 0.7rem;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
