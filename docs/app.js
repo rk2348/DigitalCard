@@ -319,7 +319,7 @@ function showStatusDisplay(stats) {
 
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "block";
-  setStatus("封を開いています...");
+  setStatus("登録しています...");
 
   if (stats.isMutation) {
     revealCardEl.classList.add("mutation");
@@ -348,7 +348,7 @@ function showStatusDisplay(stats) {
       spawnSparkles(stats.isMutation ? 20 : 9);
 
       setTimeout(() => {
-        setStatus(stats.characterName + " が誕生した！", "success");
+        setStatus(stats.characterName + " を登録しました！", "success");
       }, 700);
     }, 450);
   }, 950);
