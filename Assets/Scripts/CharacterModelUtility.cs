@@ -63,18 +63,18 @@ public static class CharacterModelUtility
     }
 
     /// <summary>
-    /// 属性ごとの仮の表示色。実際のカラーパレットが決まったら調整してください。
+    /// 属性ごとの仮の表示色。実際のカード(闇・火・光・水・地・風)のアイコンの色に揃えてある。
     /// </summary>
     public static Color GetElementColor(ElementType element)
     {
         switch (element)
         {
-            case ElementType.Fire: return new Color(0.9f, 0.3f, 0.2f);
-            case ElementType.Wind: return new Color(0.4f, 0.8f, 0.4f);
-            case ElementType.Thunder: return new Color(0.95f, 0.85f, 0.2f);
-            case ElementType.Water: return new Color(0.2f, 0.5f, 0.9f);
-            case ElementType.Earth: return new Color(0.6f, 0.4f, 0.2f);
-            case ElementType.Light: return new Color(0.95f, 0.95f, 0.85f);
+            case ElementType.Fire: return new Color(0.85f, 0.16f, 0.16f);  // 火：赤
+            case ElementType.Wind: return new Color(0.26f, 0.65f, 0.36f);  // 風：緑
+            case ElementType.Dark: return new Color(0.42f, 0.30f, 0.58f);  // 闇：紫
+            case ElementType.Water: return new Color(0.16f, 0.67f, 0.89f); // 水：水色
+            case ElementType.Earth: return new Color(0.55f, 0.43f, 0.26f); // 地：茶
+            case ElementType.Light: return new Color(0.96f, 0.79f, 0.36f); // 光：金
             default: return Color.white;
         }
     }

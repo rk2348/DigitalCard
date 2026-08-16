@@ -31,7 +31,7 @@ function createSeededRandom(seed) {
   };
 }
 
-const ELEMENT_TYPES = ["Fire", "Wind", "Thunder", "Water", "Earth", "Light"];
+const ELEMENT_TYPES = ["Fire", "Wind", "Dark", "Water", "Earth", "Light"];
 const SKILL_TYPES = ["PowerBoost", "GuardBoost", "LifeDrain", "Overdrive"];
 const SKILL_NAME_MAP = {
   PowerBoost: "疾風の一撃",
@@ -135,22 +135,34 @@ let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち�
 let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
 
 // Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
+// 実際のカード(闇・火・光・水・地・風)に合わせてある。Thunder(雷)は実カードに存在しないため
+// Dark(闇)に対応させている。
 const ELEMENT_LABELS = {
-  Fire: "炎",
+  Fire: "火",
   Wind: "風",
-  Thunder: "雷",
+  Dark: "闇",
   Water: "水",
-  Earth: "土",
+  Earth: "地",
   Light: "光",
 };
 
 const ELEMENT_ICONS = {
   Fire: "🔥",
-  Wind: "🌪️",
-  Thunder: "⚡",
+  Wind: "🌀",
+  Dark: "🌙",
   Water: "💧",
-  Earth: "🪨",
-  Light: "✨",
+  Earth: "🌱",
+  Light: "☀️",
+};
+
+// カードの縁取りやグロー(発光)に使う属性ごとのアクセントカラー。実カードのアイコンの色に揃えてある。
+const ELEMENT_COLORS = {
+  Fire: "#e2434f",
+  Wind: "#4caf6a",
+  Dark: "#8c6fc7",
+  Water: "#3ab7e8",
+  Earth: "#a9835a",
+  Light: "#f4c95d",
 };
 
 // ステータスバーを何%まで伸ばすかの基準値(突然変異で1.5倍された値でも収まる余裕を持たせている)
@@ -317,6 +329,7 @@ function showStatusDisplay(stats) {
   resultCharacterNameEl.textContent = stats.characterName;
   resultElementEl.textContent = ELEMENT_LABELS[stats.element] || stats.element;
   elementIconEl.textContent = ELEMENT_ICONS[stats.element] || "";
+  revealCardEl.style.setProperty("--element-accent", ELEMENT_COLORS[stats.element] || "#f0c674");
   resultAttackEl.textContent = stats.attack;
   resultDefenseEl.textContent = stats.defense;
   resultSpeedEl.textContent = stats.speed;
