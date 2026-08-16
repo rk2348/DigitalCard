@@ -313,6 +313,7 @@ h1 {
   transform: translateY(-160px) rotate(-12deg) scale(0.6);
   position: relative;
   z-index: 2;
+  container-type: inline-size;
 }
 
 .reveal-card.show {
@@ -511,26 +512,28 @@ h1 {
   width: 18%;
   text-align: center;
   font-weight: 900;
-  font-size: clamp(0.85rem, 3.6vw, 1.05rem);
-  color: #7a1616;
+  font-size: 7.3cqw;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
+  -webkit-text-stroke: 0.45cqw #042433;
+  paint-order: stroke fill;
   opacity: 0;
   z-index: 7;
 }
 
 .overlay-hp {
   top: 51.5%;
-  color: #2c6b2f;
+  color: #8ed973;
 }
 
 .overlay-atk {
   top: 58.3%;
-  color: #7a1616;
+  color: #c00000;
 }
 
 .overlay-spd {
   top: 65.1%;
-  color: #1f5e8c;
+  color: #83cbeb;
 }
 
 .reveal-card.reveal-pop .overlay-value {
@@ -570,8 +573,9 @@ h1 {
 .skill-name {
   margin: 0 0 3px;
   font-weight: 700;
-  color: #1c1712;
-  font-size: clamp(0.6rem, 2.6vw, 0.75rem);
+  color: #000;
+  font-size: 6.8cqw;
+  line-height: 1.1;
 }
 
 .skill-description {
