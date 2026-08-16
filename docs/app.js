@@ -101,7 +101,6 @@ function generateCharacterStats(seed, characterName) {
 }
 
 const statusEl = document.getElementById("status");
-const debugLogEl = document.getElementById("debug-log");
 const readerEl = document.getElementById("reader");
 const nameInputSectionEl = document.getElementById("name-input-section");
 const scannedCardIdEl = document.getElementById("scanned-card-id");
@@ -110,6 +109,8 @@ const registerBtn = document.getElementById("register-btn");
 const rescanBtn = document.getElementById("rescan-btn");
 const statusDisplaySectionEl = document.getElementById("status-display-section");
 const revealCardEl = document.getElementById("reveal-card");
+const revealFlashEl = document.getElementById("reveal-flash");
+const mutationVignetteEl = document.getElementById("mutation-vignette");
 const sparkleLayerEl = document.getElementById("sparkle-layer");
 const mutationBadgeEl = document.getElementById("mutation-badge");
 const elementChipEl = document.getElementById("element-chip");
@@ -162,13 +163,9 @@ function setStatus(text, type = "info") {
   statusEl.className = "status " + type;
 }
 
-/// 画面上にもエラーの詳細を表示する（スマホだと開発者ツールが見れないため）。
+/// コンソールにログを出す（画面上には表示しない）。
 function logDebug(text) {
   console.log(text);
-  if (debugLogEl) {
-    debugLogEl.style.display = "block";
-    debugLogEl.textContent += text + "\n";
-  }
 }
 
 function init() {
@@ -297,18 +294,24 @@ function resetToScanning() {
   isAwaitingName = false;
   scannedCardData = null;
 
+  mutationVignetteEl.classList.remove("active");
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "none";
   readerEl.style.display = "block";
   setStatus("QRコードをカメラにかざしてください");
 }
 
-/// Unityから返ってきたキャラクターステータスを、カードをめくる演出とともに表示する
+/// Unityから返ってきたキャラクターステータスを、カード開封の演出とともに表示する
 function showStatusDisplay(stats) {
-  // 表示前に演出用の状態をリセットしておく(2回目以降のスキャンでも正しく再生されるように)
-  revealCardEl.classList.remove("flipped", "mutation");
+  // 表示前に演出用の状態を全リセット(2回目以降のスキャンでも正しく再生されるように)
+  revealCardEl.classList.remove("flipped", "mutation", "show", "shine", "impact");
+  revealFlashEl.classList.remove("fire");
+  mutationVignetteEl.classList.remove("active");
   sparkleLayerEl.innerHTML = "";
-  [barAttackEl, barDefenseEl, barSpeedEl, barHpEl].forEach((el) => (el.style.width = "0%"));
+  [barAttackEl, barDefenseEl, barSpeedEl, barHpEl].forEach((el) => {
+    el.style.width = "0%";
+    el.classList.remove("pulse");
+  });
 
   mutationBadgeEl.style.display = stats.isMutation ? "block" : "none";
   resultCharacterNameEl.textContent = stats.characterName;
@@ -325,24 +328,38 @@ function showStatusDisplay(stats) {
   statusDisplaySectionEl.style.display = "block";
   setStatus("封を開いています...");
 
-  // 少し間を置いてからカードをめくる(名前入力→即切り替わりだと演出が伝わらないため)
+  if (stats.isMutation) {
+    revealCardEl.classList.add("mutation");
+    mutationVignetteEl.classList.add("active");
+  }
+
+  // 1. フラッシュ + カードが弾けるように登場
+  requestAnimationFrame(() => {
+    revealFlashEl.classList.add("fire");
+    revealCardEl.classList.add("show");
+  });
+
+  // 2. カードをめくる
   setTimeout(() => {
-    if (stats.isMutation) {
-      revealCardEl.classList.add("mutation");
-    }
     revealCardEl.classList.add("flipped");
 
-    // めくり終わるタイミングでステータスバーを伸ばす
+    // 3. めくり切ったところで衝撃・光の帯・バーの演出
     setTimeout(() => {
+      revealCardEl.classList.add("impact", "shine");
+
       barAttackEl.style.width = Math.min(100, (stats.attack / BAR_MAX.attack) * 100) + "%";
       barDefenseEl.style.width = Math.min(100, (stats.defense / BAR_MAX.defense) * 100) + "%";
       barSpeedEl.style.width = Math.min(100, (stats.speed / BAR_MAX.speed) * 100) + "%";
       barHpEl.style.width = Math.min(100, (stats.hp / BAR_MAX.hp) * 100) + "%";
 
-      spawnSparkles(stats.isMutation ? 14 : 6);
-      setStatus(stats.characterName + " が誕生した！", "success");
-    }, 550);
-  }, 250);
+      spawnSparkles(stats.isMutation ? 18 : 8);
+
+      setTimeout(() => {
+        [barAttackEl, barDefenseEl, barSpeedEl, barHpEl].forEach((el) => el.classList.add("pulse"));
+        setStatus(stats.characterName + " が誕生した！", "success");
+      }, 700);
+    }, 450);
+  }, 550);
 }
 
 /// カードめくりの瞬間に、キラキラした演出用の要素を数個ランダムな位置に散らす
@@ -354,7 +371,7 @@ function spawnSparkles(count) {
     el.textContent = glyphs[Math.floor(Math.random() * glyphs.length)];
     el.style.left = Math.random() * 100 + "%";
     el.style.top = Math.random() * 100 + "%";
-    el.style.animationDelay = Math.random() * 300 + "ms";
+    el.style.animationDelay = Math.random() * 400 + "ms";
     sparkleLayerEl.appendChild(el);
   }
 }
