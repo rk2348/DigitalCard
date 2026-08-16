@@ -110,21 +110,17 @@ const rescanBtn = document.getElementById("rescan-btn");
 const statusDisplaySectionEl = document.getElementById("status-display-section");
 const revealCardEl = document.getElementById("reveal-card");
 const revealFlashEl = document.getElementById("reveal-flash");
+const shockwaveRingEl = document.getElementById("shockwave-ring");
+const flashBulbsEl = document.getElementById("flash-bulbs");
 const mutationVignetteEl = document.getElementById("mutation-vignette");
 const sparkleLayerEl = document.getElementById("sparkle-layer");
+const cardArtEl = document.getElementById("card-art");
 const mutationBadgeEl = document.getElementById("mutation-badge");
-const elementChipEl = document.getElementById("element-chip");
-const elementIconEl = document.getElementById("element-icon");
 const resultCharacterNameEl = document.getElementById("result-character-name");
-const resultElementEl = document.getElementById("result-element");
 const resultAttackEl = document.getElementById("result-attack");
 const resultDefenseEl = document.getElementById("result-defense");
 const resultSpeedEl = document.getElementById("result-speed");
 const resultHpEl = document.getElementById("result-hp");
-const barAttackEl = document.getElementById("bar-attack");
-const barDefenseEl = document.getElementById("bar-defense");
-const barSpeedEl = document.getElementById("bar-speed");
-const barHpEl = document.getElementById("bar-hp");
 const resultSkillNameEl = document.getElementById("result-skill-name");
 const resultSkillDescriptionEl = document.getElementById("result-skill-description");
 const nextScanBtn = document.getElementById("next-scan-btn");
@@ -146,27 +142,15 @@ const ELEMENT_LABELS = {
   Light: "光",
 };
 
-const ELEMENT_ICONS = {
-  Fire: "🔥",
-  Wind: "🌀",
-  Dark: "🌙",
-  Water: "💧",
-  Earth: "🌱",
-  Light: "☀️",
+// 属性ごとの実カード画像ファイル名
+const ELEMENT_CARD_IMAGES = {
+  Fire: "cards/card-fire.png",
+  Wind: "cards/card-wind.png",
+  Dark: "cards/card-dark.png",
+  Water: "cards/card-water.png",
+  Earth: "cards/card-earth.png",
+  Light: "cards/card-light.png",
 };
-
-// カードの縁取りやグロー(発光)に使う属性ごとのアクセントカラー。実カードのアイコンの色に揃えてある。
-const ELEMENT_COLORS = {
-  Fire: "#e2434f",
-  Wind: "#4caf6a",
-  Dark: "#8c6fc7",
-  Water: "#3ab7e8",
-  Earth: "#a9835a",
-  Light: "#f4c95d",
-};
-
-// ステータスバーを何%まで伸ばすかの基準値(突然変異で1.5倍された値でも収まる余裕を持たせている)
-const BAR_MAX = { attack: 45, defense: 30, speed: 30, hp: 100 };
 
 let db = null;
 
@@ -313,27 +297,23 @@ function resetToScanning() {
   setStatus("QRコードをカメラにかざしてください");
 }
 
-/// Unityから返ってきたキャラクターステータスを、カード開封の演出とともに表示する
+/// Unityから返ってきたキャラクターステータスを、カード開封のステージ演出とともに表示する
 function showStatusDisplay(stats) {
   // 表示前に演出用の状態を全リセット(2回目以降のスキャンでも正しく再生されるように)
-  revealCardEl.classList.remove("flipped", "mutation", "show", "shine", "impact");
+  revealCardEl.classList.remove("flipped", "mutation", "show", "shine", "impact", "reveal-pop");
   revealFlashEl.classList.remove("fire");
+  shockwaveRingEl.classList.remove("pulse");
   mutationVignetteEl.classList.remove("active");
   sparkleLayerEl.innerHTML = "";
-  [barAttackEl, barDefenseEl, barSpeedEl, barHpEl].forEach((el) => {
-    el.style.width = "0%";
-    el.classList.remove("pulse");
-  });
+  flashBulbsEl.innerHTML = "";
 
+  cardArtEl.src = ELEMENT_CARD_IMAGES[stats.element] || "";
   mutationBadgeEl.style.display = stats.isMutation ? "block" : "none";
   resultCharacterNameEl.textContent = stats.characterName;
-  resultElementEl.textContent = ELEMENT_LABELS[stats.element] || stats.element;
-  elementIconEl.textContent = ELEMENT_ICONS[stats.element] || "";
-  revealCardEl.style.setProperty("--element-accent", ELEMENT_COLORS[stats.element] || "#f0c674");
   resultAttackEl.textContent = stats.attack;
   resultDefenseEl.textContent = stats.defense;
   resultSpeedEl.textContent = stats.speed;
-  resultHpEl.textContent = stats.hp + " / " + stats.maxHp;
+  resultHpEl.textContent = stats.hp;
   resultSkillNameEl.textContent = "スキル「" + stats.skillName + "」";
   resultSkillDescriptionEl.textContent = stats.skillDescription;
 
@@ -346,33 +326,44 @@ function showStatusDisplay(stats) {
     mutationVignetteEl.classList.add("active");
   }
 
-  // 1. フラッシュ + カードが弾けるように登場
+  // 1. カードが上から舞い降りてくる
   requestAnimationFrame(() => {
-    revealFlashEl.classList.add("fire");
     revealCardEl.classList.add("show");
   });
 
-  // 2. カードをめくる
+  // 2. 着地の瞬間：フラッシュ + 衝撃波 + カメラのフラッシュが焚かれる
+  setTimeout(() => {
+    revealFlashEl.classList.add("fire");
+    shockwaveRingEl.classList.add("pulse");
+    spawnFlashBulbs(stats.isMutation ? 6 : 3);
+  }, 720);
+
+  // 3. カードをめくって正体を明かす
   setTimeout(() => {
     revealCardEl.classList.add("flipped");
 
-    // 3. めくり切ったところで衝撃・光の帯・バーの演出
+    // 4. めくり切ったところで衝撃・光の帯・文字の焼き付き演出
     setTimeout(() => {
-      revealCardEl.classList.add("impact", "shine");
-
-      barAttackEl.style.width = Math.min(100, (stats.attack / BAR_MAX.attack) * 100) + "%";
-      barDefenseEl.style.width = Math.min(100, (stats.defense / BAR_MAX.defense) * 100) + "%";
-      barSpeedEl.style.width = Math.min(100, (stats.speed / BAR_MAX.speed) * 100) + "%";
-      barHpEl.style.width = Math.min(100, (stats.hp / BAR_MAX.hp) * 100) + "%";
-
-      spawnSparkles(stats.isMutation ? 18 : 8);
+      revealCardEl.classList.add("impact", "shine", "reveal-pop");
+      spawnSparkles(stats.isMutation ? 20 : 9);
 
       setTimeout(() => {
-        [barAttackEl, barDefenseEl, barSpeedEl, barHpEl].forEach((el) => el.classList.add("pulse"));
         setStatus(stats.characterName + " が誕生した！", "success");
       }, 700);
     }, 450);
-  }, 550);
+  }, 950);
+}
+
+/// 着地の瞬間、カメラのフラッシュのような光を数回ランダムな位置で焚く
+function spawnFlashBulbs(count) {
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("span");
+    el.className = "flash-bulb";
+    el.style.left = 20 + Math.random() * 60 + "%";
+    el.style.top = Math.random() * 40 + "%";
+    el.style.animationDelay = Math.random() * 250 + "ms";
+    flashBulbsEl.appendChild(el);
+  }
 }
 
 /// カードめくりの瞬間に、キラキラした演出用の要素を数個ランダムな位置に散らす

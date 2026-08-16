@@ -14,9 +14,11 @@
 </head>
 <body>
   <div class="mutation-vignette" id="mutation-vignette"></div>
+  <div class="stage-spotlight"></div>
+  <div class="stage-dust" id="stage-dust"></div>
 
   <div class="container">
-    <div class="brand-mark">織</div>
+    <div class="brand-mark">⬡</div>
     <h1>オリサモ カードスキャン</h1>
 
     <div id="reader"></div>
@@ -34,47 +36,29 @@
     <div id="status-display-section" class="status-display-section" style="display: none;">
       <div class="reveal-stage">
         <div class="reveal-flash" id="reveal-flash"></div>
+        <div class="shockwave-ring" id="shockwave-ring"></div>
+
         <div class="reveal-card" id="reveal-card">
           <div class="reveal-card-inner" id="reveal-card-inner">
             <div class="reveal-card-face reveal-card-back">
-              <div class="crest-glyph">織</div>
+              <div class="crest-glyph">⬡</div>
               <p class="crest-caption">ORISAMO CARD</p>
             </div>
 
             <div class="reveal-card-face reveal-card-front">
+              <img id="card-art" class="card-art" src="" alt="" />
+
               <p id="mutation-badge" class="mutation-badge" style="display: none;">★ 突然変異 ★</p>
 
-              <div class="element-chip" id="element-chip">
-                <span id="element-icon" class="element-icon"></span>
-                <span id="result-element"></span>
-              </div>
+              <span id="defense-badge" class="overlay-defense">🛡 <span id="result-defense"></span></span>
 
               <h2 id="result-character-name" class="result-character-name"></h2>
 
-              <div class="stat-bars">
-                <div class="stat-row">
-                  <span class="stat-label">攻撃力</span>
-                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-attack"></div></div>
-                  <span id="result-attack" class="stat-value"></span>
-                </div>
-                <div class="stat-row">
-                  <span class="stat-label">防御力</span>
-                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-defense"></div></div>
-                  <span id="result-defense" class="stat-value"></span>
-                </div>
-                <div class="stat-row">
-                  <span class="stat-label">素早さ</span>
-                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-speed"></div></div>
-                  <span id="result-speed" class="stat-value"></span>
-                </div>
-                <div class="stat-row">
-                  <span class="stat-label">HP</span>
-                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-hp"></div></div>
-                  <span id="result-hp" class="stat-value"></span>
-                </div>
-              </div>
+              <span id="result-hp" class="overlay-value overlay-hp"></span>
+              <span id="result-attack" class="overlay-value overlay-atk"></span>
+              <span id="result-speed" class="overlay-value overlay-spd"></span>
 
-              <div class="skill-box">
+              <div class="overlay-skill">
                 <p id="result-skill-name" class="skill-name"></p>
                 <p id="result-skill-description" class="skill-description"></p>
               </div>
@@ -82,6 +66,7 @@
           </div>
         </div>
 
+        <div class="flash-bulbs" id="flash-bulbs"></div>
         <div class="sparkle-layer" id="sparkle-layer"></div>
       </div>
 
