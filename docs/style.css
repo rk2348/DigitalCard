@@ -488,16 +488,17 @@ h1 {
 
 .result-character-name {
   position: absolute;
-  top: 24%;
-  left: 10%;
-  right: 10%;
+  top: 10.8%;
+  left: 41.3%;
+  width: 62%;
   margin: 0;
+  transform: translate(-50%, -50%);
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: clamp(0.95rem, 5.4vw, 1.3rem);
+  font-size: clamp(0.85rem, 5.2cqw, 1.4rem);
   color: #1c1712;
   text-align: center;
-  line-height: 1.35;
+  line-height: 1.15;
   opacity: 0;
   z-index: 7;
 }
@@ -557,6 +558,7 @@ h1 {
   width: 55%;
   bottom: 5%;
   text-align: left;
+  overflow: hidden;
   opacity: 0;
   z-index: 7;
 }
@@ -574,15 +576,15 @@ h1 {
   margin: 0 0 3px;
   font-weight: 700;
   color: #000;
-  font-size: 6.8cqw;
-  line-height: 1.1;
+  font-size: 4.4cqw;
+  line-height: 1.15;
 }
 
 .skill-description {
   margin: 0;
-  font-size: clamp(0.5rem, 2.1vw, 0.63rem);
+  font-size: 2.6cqw;
   color: #4a4032;
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
 /* スパークル演出。カードめくり時に短く弾ける */
