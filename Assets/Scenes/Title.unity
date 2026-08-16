@@ -1265,7 +1265,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 47b439bc60c28944fbd9c6ff1709d539, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::TitleManager
-  characterCreationSceneName: CharacterCreation
+  characterCreationSceneName: QRCreation
   characterRegistrationSceneName: QRScan
   battleSceneName: Battle
   showDeveloperMode: 1

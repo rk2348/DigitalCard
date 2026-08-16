@@ -18,14 +18,14 @@ using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using 
 /// 【全体の流れ】
 /// 1. スマホでGitHub Pages上のスキャンページ(qr-scan-site)を開き、カメラでQRコードを読み取る
 /// 2. スキャンページがQRの中身(JSON文字列)をこのUnityサーバーへ POST /scan で送信する
-/// 3. このスクリプトが受信し、OnCardJsonReceived イベントで通知する(Unityのメインスレッドから発火)
-/// 4. QRCharacterStatusDisplay がそのイベントを受け取り、名前入力〜キャラクター確定を行う
+/// 3. このスクリプトが受信し、ProcessCardJson デリゲートを呼び出してキャラクターを生成する
+///    (Unityのメインスレッドから呼ばれる)
+/// 4. 生成結果(ステータスのJSON)をそのままHTTPレスポンスとしてスマホへ返す
+/// 5. スマホ側(app.js)がレスポンスを受け取り、ステータス画面を表示する
 ///
-/// つまりQRコードそのものを読み取るカメラ処理はスマホのブラウザ側が担当し、
-/// Unity（パソコン）は読み取り結果を受け取って表示するだけの「バックエンドサーバー」になる。
-/// 従来のQRCodeScanner.cs（Unity自身のWebカメラでスキャンする方式）は不要であれば
-/// 外しても構わないし、開発中の動作確認用に併用しても構わない
-/// （QRCharacterStatusDisplayはどちらのイベントが来ても同じ処理をする）。
+/// つまりQRコードそのものを読み取るカメラ処理も、キャラクターのステータス表示も
+/// スマホのブラウザ側が担当し、Unity（パソコン）はキャラクター生成の計算だけを行う
+/// 「バックエンドサーバー」になる。
 ///
 /// 【セットアップ方法】
 /// 1. QRScanシーンに空のGameObjectを作成し、このスクリプトをアタッチ
@@ -36,7 +36,7 @@ using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using 
 ///    serverUrlQrImage に「スキャンページ＋サーバーアドレス」を埋め込んだQRコードを
 ///    表示できる。スマホでこのQRコードを最初に一度読み取れば、
 ///    サーバーアドレスの手入力が不要になる
-/// 5. QRCharacterStatusDisplay の qrWebServer フィールドに、このコンポーネントをドラッグする
+/// 5. ProcessCardJson に、キャラクター生成処理(QRCharacterRegistrarなど)を設定する
 ///
 /// 【重要：Windowsでの注意点】
 /// localhostOnly が false（LAN内の他端末からのアクセスを受け付ける設定）の場合、
@@ -80,13 +80,29 @@ public class QRWebServer : MonoBehaviour
     [Tooltip("接続用QRコードの画像サイズ（ピクセル）")]
     [SerializeField] private int qrCodeSize = 384;
 
-    /// <summary>QRコードの中身(JSON文字列)を受信した時に発火。必ずUnityのメインスレッドから呼ばれる。</summary>
-    public event Action<string> OnCardJsonReceived;
+    [Tooltip("スマホからのリクエストを処理する際、メインスレッドでの処理完了を待つ最大秒数")]
+    [SerializeField] private float processTimeoutSeconds = 5f;
+
+    /// <summary>
+    /// QRコードの中身(JSON文字列)を受け取り、スマホへ返すレスポンスのJSON文字列を返すデリゲート。
+    /// 必ずUnityのメインスレッド(Update)から呼び出される。
+    /// nullまたは空文字を返した場合は、汎用の {"status":"ok"} が返される。
+    /// 例外を投げた場合は {"status":"error"} が返される。
+    /// </summary>
+    public Func<string, string> ProcessCardJson;
 
     private HttpListener listener;
     private Thread listenerThread;
-    private readonly ConcurrentQueue<string> receivedQueue = new ConcurrentQueue<string>();
+    private readonly ConcurrentQueue<PendingScan> receivedQueue = new ConcurrentQueue<PendingScan>();
     private volatile bool isRunning = false;
+
+    /// <summary>1件のスキャンリクエストと、その処理結果を橋渡しするためのオブジェクト。</summary>
+    private class PendingScan
+    {
+        public string RequestJson;
+        public string ResponseJson;
+        public readonly ManualResetEventSlim WaitHandle = new ManualResetEventSlim(false);
+    }
 
     private void Start()
     {
@@ -96,10 +112,21 @@ public class QRWebServer : MonoBehaviour
     private void Update()
     {
         // 受信したデータをメインスレッドで処理する(Unity APIはメインスレッド以外から呼べないため、
-        // HttpListenerのバックグラウンドスレッドではイベントを直接発火せず、キューに貯めておく)
-        while (receivedQueue.TryDequeue(out string json))
+        // HttpListenerのバックグラウンドスレッドではキャラクター生成処理を直接呼ばず、キューに貯めておく)
+        while (receivedQueue.TryDequeue(out PendingScan pending))
         {
-            OnCardJsonReceived?.Invoke(json);
+            string responseJson = null;
+            try
+            {
+                responseJson = ProcessCardJson?.Invoke(pending.RequestJson);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("QRWebServer: カード処理中にエラーが発生しました: " + e.Message);
+            }
+
+            pending.ResponseJson = string.IsNullOrEmpty(responseJson) ? "{\"status\":\"ok\"}" : responseJson;
+            pending.WaitHandle.Set(); // HTTPスレッド側の待機を解除し、レスポンスを返させる
         }
     }
 
@@ -200,9 +227,21 @@ public class QRWebServer : MonoBehaviour
                     body = reader.ReadToEnd();
                 }
 
-                receivedQueue.Enqueue(body);
+                var pending = new PendingScan { RequestJson = body };
+                receivedQueue.Enqueue(pending);
 
-                WriteResponse(response, 200, "{\"status\":\"ok\"}");
+                // メインスレッド(Update)でキャラクター生成が終わるまで、このHTTPスレッドで待つ
+                bool completed = pending.WaitHandle.Wait(TimeSpan.FromSeconds(processTimeoutSeconds));
+
+                if (completed)
+                {
+                    WriteResponse(response, 200, pending.ResponseJson);
+                }
+                else
+                {
+                    Debug.LogWarning("QRWebServer: カード処理がタイムアウトしました。ProcessCardJsonが設定されているか確認してください。");
+                    WriteResponse(response, 504, "{\"status\":\"timeout\"}");
+                }
                 return;
             }
 

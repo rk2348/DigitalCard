@@ -8,9 +8,38 @@ const serverUrlInput = document.getElementById("server-url");
 const saveServerBtn = document.getElementById("save-server-btn");
 const statusEl = document.getElementById("status");
 const debugLogEl = document.getElementById("debug-log");
+const readerEl = document.getElementById("reader");
+const nameInputSectionEl = document.getElementById("name-input-section");
+const scannedCardIdEl = document.getElementById("scanned-card-id");
+const characterNameInput = document.getElementById("character-name");
+const registerBtn = document.getElementById("register-btn");
+const rescanBtn = document.getElementById("rescan-btn");
+const statusDisplaySectionEl = document.getElementById("status-display-section");
+const mutationBadgeEl = document.getElementById("mutation-badge");
+const resultCharacterNameEl = document.getElementById("result-character-name");
+const resultElementEl = document.getElementById("result-element");
+const resultAttackEl = document.getElementById("result-attack");
+const resultDefenseEl = document.getElementById("result-defense");
+const resultSpeedEl = document.getElementById("result-speed");
+const resultHpEl = document.getElementById("result-hp");
+const resultSkillNameEl = document.getElementById("result-skill-name");
+const resultSkillDescriptionEl = document.getElementById("result-skill-description");
+const nextScanBtn = document.getElementById("next-scan-btn");
 
 let scanner = null;
-let isSending = false;
+let isSending = false; // サーバーへの送信中（多重送信防止）
+let isAwaitingName = false; // QR読み取り済み・名前入力待ち（この間はスキャン結果を無視する）
+let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)。名前入力後にこれへcharacterNameを足して送信する
+
+// Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
+const ELEMENT_LABELS = {
+  Fire: "炎",
+  Wind: "風",
+  Thunder: "雷",
+  Water: "水",
+  Earth: "土",
+  Light: "光",
+};
 
 function getServerUrl() {
   return localStorage.getItem(SERVER_URL_KEY) || "";
@@ -135,9 +164,9 @@ function onScanFailure() {
   // 1フレームごとに呼ばれるが、単に読み取れていないだけなので何もしない
 }
 
-async function onScanSuccess(decodedText) {
-  if (isSending) return; // 連続送信を防止
-  isSending = true;
+function onScanSuccess(decodedText) {
+  // 送信中、または既に読み取り済みで名前入力待ちの間は、続けて読み取っても無視する
+  if (isSending || isAwaitingName) return;
 
   logDebug("QRコードを読み取りました: " + decodedText);
 
@@ -146,45 +175,116 @@ async function onScanSuccess(decodedText) {
     cardData = JSON.parse(decodedText);
   } catch (e) {
     setStatus("読み取れましたが、カードの形式が正しくありません", "error");
-    isSending = false;
     return;
   }
 
   if (!cardData || !cardData.cardId) {
     setStatus("読み取れましたが、カードの形式が正しくありません", "error");
-    isSending = false;
     return;
   }
 
+  scannedCardData = cardData;
+  showNameInput(cardData);
+}
+
+/// カード読み取り後、キャラクター名を入力してもらう画面を表示する
+function showNameInput(cardData) {
+  isAwaitingName = true;
+
+  scannedCardIdEl.textContent = cardData.cardId;
+  characterNameInput.value = "";
+
+  readerEl.style.display = "none";
+  nameInputSectionEl.style.display = "block";
+  setStatus("キャラクターの名前を入力してください");
+
+  // 表示直後に入力欄へフォーカス（スマホだとキーボードが自動で出る場合がある）
+  setTimeout(() => characterNameInput.focus(), 100);
+}
+
+/// 名前入力画面・ステータス表示画面を閉じて、スキャン待ち状態に戻す
+function resetToScanning() {
+  isAwaitingName = false;
+  scannedCardData = null;
+
+  nameInputSectionEl.style.display = "none";
+  statusDisplaySectionEl.style.display = "none";
+  readerEl.style.display = "block";
+  setStatus("QRコードをカメラにかざしてください");
+}
+
+/// Unityから返ってきたキャラクターステータスを画面に表示する
+function showStatusDisplay(stats) {
+  mutationBadgeEl.style.display = stats.isMutation ? "block" : "none";
+  resultCharacterNameEl.textContent = stats.characterName;
+  resultElementEl.textContent = "属性: " + (ELEMENT_LABELS[stats.element] || stats.element);
+  resultAttackEl.textContent = stats.attack;
+  resultDefenseEl.textContent = stats.defense;
+  resultSpeedEl.textContent = stats.speed;
+  resultHpEl.textContent = stats.hp + " / " + stats.maxHp;
+  resultSkillNameEl.textContent = "スキル「" + stats.skillName + "」";
+  resultSkillDescriptionEl.textContent = stats.skillDescription;
+
+  nameInputSectionEl.style.display = "none";
+  statusDisplaySectionEl.style.display = "block";
+  setStatus(stats.characterName + " が誕生した！", "success");
+}
+
+registerBtn.addEventListener("click", async () => {
+  const name = characterNameInput.value.trim();
+  if (!name) {
+    setStatus("名前を入力してください", "error");
+    characterNameInput.focus();
+    return;
+  }
+
+  if (isSending) return;
+  isSending = true;
+  registerBtn.disabled = true;
+
+  const payload = { ...scannedCardData, characterName: name };
   const serverUrl = getServerUrl();
-  setStatus("送信中...");
+  setStatus("登録中...");
 
   try {
     const res = await fetch(serverUrl + "/scan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: decodedText,
+      body: JSON.stringify(payload),
     });
 
-    if (res.ok) {
-      setStatus("送信しました！パソコンの画面を確認してください", "success");
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      logDebug("エラー(レスポンス解析): " + parseErr);
+    }
+
+    if (res.ok && data && data.status === "ok") {
+      showStatusDisplay(data);
     } else {
-      setStatus("送信に失敗しました（サーバーエラー: " + res.status + "）", "error");
-      logDebug("エラー(送信): サーバーが" + res.status + "を返しました");
+      const message = data && data.message ? data.message : "サーバーエラー: " + res.status;
+      setStatus("登録に失敗しました（" + message + "）", "error");
+      logDebug("エラー(登録): " + message);
     }
   } catch (e) {
     setStatus(
-      "サーバーに接続できませんでした。パソコンと同じWi-Fiに接続しているか、アドレスが正しいか確認してください。",
+      "サーバーに接続できませんでした。パソコンと同じWi-Fi（またはトンネルURL）に接続しているか、アドレスが正しいか確認してください。",
       "error"
     );
     logDebug("エラー(送信): " + e);
   }
 
-  // 少し待ってから再度スキャンできるようにする（同じカードの連続送信防止）
-  setTimeout(() => {
-    isSending = false;
-    setStatus("QRコードをカメラにかざしてください");
-  }, 2000);
-}
+  isSending = false;
+  registerBtn.disabled = false;
+});
+
+rescanBtn.addEventListener("click", () => {
+  resetToScanning();
+});
+
+nextScanBtn.addEventListener("click", () => {
+  resetToScanning();
+});
 
 init();

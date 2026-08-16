@@ -1203,6 +1203,7 @@ GameObject:
   m_Component:
   - component: {fileID: 958594595}
   - component: {fileID: 958594596}
+  - component: {fileID: 958594597}
   m_Layer: 0
   m_Name: QRwebserver
   m_TagString: Untagged
@@ -1243,6 +1244,21 @@ MonoBehaviour:
   scanPageUrl: 
   serverUrlQrImage: {fileID: 0}
   qrCodeSize: 384
+  processTimeoutSeconds: 5
+--- !u!114 &958594597
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 958594594}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 590c4dd43780daf40ae147daed4c973a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::QRCharacterRegistrar
+  qrWebServer: {fileID: 958594596}
+  saveScannedCharacterToGameManager: 0
 --- !u!1 &1065139569
 GameObject:
   m_ObjectHideFlags: 0
@@ -1538,62 +1554,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1349000783}
   m_CullTransparentMesh: 1
---- !u!1 &1372067747
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1372067749}
-  - component: {fileID: 1372067748}
-  m_Layer: 0
-  m_Name: QRDisplay
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1372067748
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1372067747}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f2fe0d756aeff78409105e24f86f6d6c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::QRCharacterStatusDisplay
-  qrCodeScanner: {fileID: 108561745}
-  qrWebServer: {fileID: 0}
-  statusText: {fileID: 244575079}
-  messageText: {fileID: 0}
-  nameInputPanel: {fileID: 1762480318}
-  nameInputField: {fileID: 691978183}
-  confirmNameButton: {fileID: 1525610191}
-  defaultCharacterName: "\u540D\u7121\u3057\u306E\u76F8\u68D2"
-  registerAgainButton: {fileID: 279429460}
-  modelSpawnPoint: {fileID: 0}
-  characterModelPrefab: {fileID: 0}
-  saveScannedCharacterToGameManager: 1
---- !u!4 &1372067749
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1372067747}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1385928081
 GameObject:
   m_ObjectHideFlags: 0
@@ -2135,7 +2095,6 @@ SceneRoots:
   - {fileID: 295884468}
   - {fileID: 1519558338}
   - {fileID: 108561746}
-  - {fileID: 1372067749}
   - {fileID: 559859497}
   - {fileID: 118161920}
   - {fileID: 381862896}
