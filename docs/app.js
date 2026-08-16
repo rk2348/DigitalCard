@@ -1,11 +1,24 @@
 // オリサモ カードスキャン用ページ
 // スマホのカメラでQRコード(カードID＋シード値のJSON)を読み取り、
-// Unity側で起動しているHTTPサーバー(QRWebServer.cs)に POST /scan で送信する。
+// Firebase Realtime Databaseの pendingRegistrations に書き込む。
+// Unity側(FirebaseCardListener.cs)がそれをポーリングしてキャラクターを確定させ、
+// results に結果を書き込むので、それをリアルタイムで購読して画面に表示する。
 
-const SERVER_URL_KEY = "orisamo_server_url";
+const firebaseConfig = {
+  apiKey: "AIzaSyAQBqecVE538sEoEnB1oJk0-mVCaE2mKL0",
+  authDomain: "digitalcard-b825d.firebaseapp.com",
+  databaseURL: "https://digitalcard-b825d-default-rtdb.firebaseio.com",
+  projectId: "digitalcard-b825d",
+  storageBucket: "digitalcard-b825d.firebasestorage.app",
+  messagingSenderId: "795229883483",
+  appId: "1:795229883483:web:e5e94217986f59b40f037e",
+  measurementId: "G-8QF2GGVS2C",
+};
 
-const serverUrlInput = document.getElementById("server-url");
-const saveServerBtn = document.getElementById("save-server-btn");
+// Unity側が結果を書き込むまでの最大待ち時間(ミリ秒)。
+// Unity(QRScanシーン)が起動していない場合に、ずっと「登録中...」のままにならないようにする。
+const RESULT_TIMEOUT_MS = 20000;
+
 const statusEl = document.getElementById("status");
 const debugLogEl = document.getElementById("debug-log");
 const readerEl = document.getElementById("reader");
@@ -27,9 +40,11 @@ const resultSkillDescriptionEl = document.getElementById("result-skill-descripti
 const nextScanBtn = document.getElementById("next-scan-btn");
 
 let scanner = null;
-let isSending = false; // サーバーへの送信中（多重送信防止）
-let isAwaitingName = false; // QR読み取り済み・名前入力待ち（この間はスキャン結果を無視する）
-let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)。名前入力後にこれへcharacterNameを足して送信する
+let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
+let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち（この間はスキャン結果を無視する）
+let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
+let activeResultRef = null; // 結果待ち中のFirebase参照（タイムアウト時等に購読解除するため保持）
+let resultTimeoutHandle = null;
 
 // Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
 const ELEMENT_LABELS = {
@@ -41,13 +56,7 @@ const ELEMENT_LABELS = {
   Light: "光",
 };
 
-function getServerUrl() {
-  return localStorage.getItem(SERVER_URL_KEY) || "";
-}
-
-function setServerUrl(url) {
-  localStorage.setItem(SERVER_URL_KEY, url);
-}
+let db = null;
 
 function setStatus(text, type = "info") {
   statusEl.textContent = text;
@@ -65,6 +74,16 @@ function logDebug(text) {
 
 function init() {
   logDebug("ページを読み込みました。");
+
+  try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    logDebug("Firebaseの初期化に成功しました。");
+  } catch (e) {
+    setStatus("Firebaseの初期化に失敗しました: " + e.message, "error");
+    logDebug("エラー(Firebase初期化): " + e);
+    return;
+  }
 
   // セキュアな接続(https、またはlocalhost)でないとカメラAPIが使えないため、先にチェックする
   const isSecure =
@@ -97,37 +116,9 @@ function init() {
     return;
   }
 
-  // Unity側で表示する接続用QRコードを読み取って開いた場合、
-  // ?server=http://... というクエリパラメータでサーバーアドレスが渡ってくる
-  const params = new URLSearchParams(window.location.search);
-  const paramServer = params.get("server");
-  if (paramServer) {
-    setServerUrl(paramServer);
-    logDebug("URLパラメータからサーバーアドレスを設定しました: " + paramServer);
-  }
-
-  const savedUrl = getServerUrl();
-  if (savedUrl) {
-    serverUrlInput.value = savedUrl;
-    setStatus("QRコードをカメラにかざしてください");
-    startScanner();
-  } else {
-    setStatus("サーバーのアドレスを設定してください");
-  }
-}
-
-saveServerBtn.addEventListener("click", () => {
-  logDebug("「保存してスキャン開始」が押されました。");
-
-  const url = serverUrlInput.value.trim().replace(/\/$/, "");
-  if (!url) {
-    setStatus("サーバーのアドレスを入力してください", "error");
-    return;
-  }
-  setServerUrl(url);
   setStatus("QRコードをカメラにかざしてください");
   startScanner();
-});
+}
 
 function startScanner() {
   if (scanner) {
@@ -165,7 +156,7 @@ function onScanFailure() {
 }
 
 function onScanSuccess(decodedText) {
-  // 送信中、または既に読み取り済みで名前入力待ちの間は、続けて読み取っても無視する
+  // 送信中、または既に読み取り済みで名前入力/結果待ちの間は、続けて読み取っても無視する
   if (isSending || isAwaitingName) return;
 
   logDebug("QRコードを読み取りました: " + decodedText);
@@ -204,6 +195,8 @@ function showNameInput(cardData) {
 
 /// 名前入力画面・ステータス表示画面を閉じて、スキャン待ち状態に戻す
 function resetToScanning() {
+  cleanupResultListener();
+
   isAwaitingName = false;
   scannedCardData = null;
 
@@ -211,6 +204,18 @@ function resetToScanning() {
   statusDisplaySectionEl.style.display = "none";
   readerEl.style.display = "block";
   setStatus("QRコードをカメラにかざしてください");
+}
+
+/// 結果待ちの購読とタイムアウトタイマーを片付ける
+function cleanupResultListener() {
+  if (activeResultRef) {
+    activeResultRef.off();
+    activeResultRef = null;
+  }
+  if (resultTimeoutHandle) {
+    clearTimeout(resultTimeoutHandle);
+    resultTimeoutHandle = null;
+  }
 }
 
 /// Unityから返ってきたキャラクターステータスを画面に表示する
@@ -230,7 +235,7 @@ function showStatusDisplay(stats) {
   setStatus(stats.characterName + " が誕生した！", "success");
 }
 
-registerBtn.addEventListener("click", async () => {
+registerBtn.addEventListener("click", () => {
   const name = characterNameInput.value.trim();
   if (!name) {
     setStatus("名前を入力してください", "error");
@@ -241,43 +246,66 @@ registerBtn.addEventListener("click", async () => {
   if (isSending) return;
   isSending = true;
   registerBtn.disabled = true;
+  setStatus("登録中...パソコン側で処理されるまでお待ちください");
 
-  const payload = { ...scannedCardData, characterName: name };
-  const serverUrl = getServerUrl();
-  setStatus("登録中...");
+  const pendingRef = db.ref("pendingRegistrations").push();
+  const payload = {
+    cardId: scannedCardData.cardId,
+    seed: scannedCardData.seed,
+    characterName: name,
+    timestamp: Date.now(),
+  };
 
-  try {
-    const res = await fetch(serverUrl + "/scan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+  pendingRef
+    .set(payload)
+    .then(() => {
+      logDebug("Firebaseへ書き込みました: " + JSON.stringify(payload));
+      waitForResult(pendingRef.key);
+    })
+    .catch((e) => {
+      setStatus("Firebaseへの送信に失敗しました: " + e.message, "error");
+      logDebug("エラー(Firebase書き込み): " + e);
+      isSending = false;
+      registerBtn.disabled = false;
     });
+});
 
-    let data = null;
-    try {
-      data = await res.json();
-    } catch (parseErr) {
-      logDebug("エラー(レスポンス解析): " + parseErr);
-    }
+/// pendingRegistrationsへの書き込み後、対応する results/{key} をリアルタイムで購読し、
+/// Unity側の処理結果が書き込まれたらステータス画面を表示する。
+function waitForResult(key) {
+  const resultRef = db.ref("results/" + key);
+  activeResultRef = resultRef;
 
-    if (res.ok && data && data.status === "ok") {
-      showStatusDisplay(data);
-    } else {
-      const message = data && data.message ? data.message : "サーバーエラー: " + res.status;
-      setStatus("登録に失敗しました（" + message + "）", "error");
-      logDebug("エラー(登録): " + message);
-    }
-  } catch (e) {
+  resultTimeoutHandle = setTimeout(() => {
+    cleanupResultListener();
     setStatus(
-      "サーバーに接続できませんでした。パソコンと同じWi-Fi（またはトンネルURL）に接続しているか、アドレスが正しいか確認してください。",
+      "パソコン側からの応答がありませんでした。Unity(QRScanシーン)が起動しているか確認してください。",
       "error"
     );
-    logDebug("エラー(送信): " + e);
-  }
+    logDebug("エラー: results/" + key + " の待受がタイムアウトしました");
+    isSending = false;
+    registerBtn.disabled = false;
+  }, RESULT_TIMEOUT_MS);
 
-  isSending = false;
-  registerBtn.disabled = false;
-});
+  resultRef.on("value", (snapshot) => {
+    const data = snapshot.val();
+    if (!data) return; // まだUnity側が処理していない
+
+    cleanupResultListener();
+    isSending = false;
+    registerBtn.disabled = false;
+
+    if (data.status === "ok") {
+      showStatusDisplay(data);
+    } else {
+      setStatus("登録に失敗しました（" + (data.message || "不明なエラー") + "）", "error");
+      logDebug("エラー(登録): " + (data.message || "不明なエラー"));
+    }
+
+    // 結果ノードは表示に使い終わったら消してよい(Firebase側の掃除)
+    resultRef.remove().catch(() => {});
+  });
+}
 
 rescanBtn.addEventListener("click", () => {
   resetToScanning();

@@ -21,47 +21,6 @@ h1 {
   margin: 12px 0 20px;
 }
 
-#server-setup {
-  background: #16213e;
-  border-radius: 12px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
-}
-
-#server-setup label {
-  display: block;
-  font-size: 0.85rem;
-  margin-bottom: 6px;
-  color: #ccc;
-}
-
-#server-setup input {
-  width: 100%;
-  padding: 10px;
-  border-radius: 8px;
-  border: none;
-  margin-bottom: 10px;
-  font-size: 1rem;
-}
-
-#server-setup button {
-  width: 100%;
-  padding: 12px;
-  border-radius: 8px;
-  border: none;
-  background: #e94560;
-  color: white;
-  font-weight: bold;
-  font-size: 1rem;
-}
-
-.hint {
-  font-size: 0.75rem;
-  color: #999;
-  margin: 10px 0 0;
-  line-height: 1.5;
-}
-
 #reader {
   border-radius: 12px;
   overflow: hidden;
