@@ -1,8 +1,8 @@
 // オリサモ カードスキャン用ページ
-// スマホのカメラでQRコード(カードID＋シード値のJSON)を読み取り、
-// Firebase Realtime Databaseの pendingRegistrations に書き込む。
-// Unity側(FirebaseCardListener.cs)がそれをポーリングしてキャラクターを確定させ、
-// results に結果を書き込むので、それをリアルタイムで購読して画面に表示する。
+// スマホのカメラでQRコード(カードID＋シード値のJSON)を読み取り、名前を入力すると、
+// その場でJavaScript側でキャラクターのステータスを確定させて表示する。
+// Unity(QRScanScene)は起動不要。結果はFirebase Realtime Databaseの /characters に
+// 記録として保存するので、将来Unity側で読み込んで使うこともできる。
 
 const firebaseConfig = {
   apiKey: "AIzaSyAQBqecVE538sEoEnB1oJk0-mVCaE2mKL0",
@@ -15,9 +15,90 @@ const firebaseConfig = {
   measurementId: "G-8QF2GGVS2C",
 };
 
-// Unity側が結果を書き込むまでの最大待ち時間(ミリ秒)。
-// Unity(QRScanシーン)が起動していない場合に、ずっと「登録中...」のままにならないようにする。
-const RESULT_TIMEOUT_MS = 20000;
+// Unity側の CharacterStats.AssignRandomStats(seed) と同等のロジックをJSに移植したもの。
+// スマホ側だけでキャラクターを確定できるようにするため、Unity(QRScanScene)は不要になる。
+// ※C#のSystem.Randomとは異なる乱数アルゴリズムを使うため、同じseedでも
+//   C#側とJS側で計算結果が完全には一致しない点に注意（今はJS側だけで完結させる運用のため問題なし）。
+
+/// シード値から決定的な乱数列を生成する(mulberry32)。同じseedからは常に同じ結果が再現される。
+function createSeededRandom(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t += 0x6d2b79f5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const ELEMENT_TYPES = ["Fire", "Wind", "Thunder", "Water", "Earth", "Light"];
+const SKILL_TYPES = ["PowerBoost", "GuardBoost", "LifeDrain", "Overdrive"];
+const SKILL_NAME_MAP = {
+  PowerBoost: "疾風の一撃",
+  GuardBoost: "俊敏なる守り",
+  LifeDrain: "生命吸収",
+  Overdrive: "渾身の一打",
+};
+
+function buildSkillDescription(skillType, ratio) {
+  const percent = Math.round(ratio * 100);
+  switch (skillType) {
+    case "PowerBoost":
+      return `素早さの${percent}%を攻撃力に加算`;
+    case "GuardBoost":
+      return `素早さの${percent}%を防御力に加算`;
+    case "LifeDrain":
+      return `与えたダメージの${percent}%を体力に回復`;
+    case "Overdrive":
+      return `攻撃力の${percent}%分、追加ダメージを与える`;
+    default:
+      return "";
+  }
+}
+
+/// seedとキャラクター名から、確定したステータスを生成する。
+/// 戻り値の形式はUnity側から返していたレスポンスJSONと同じ(showStatusDisplayでそのまま使える)。
+function generateCharacterStats(seed, characterName) {
+  const rand = createSeededRandom(seed);
+  const nextInt = (min, maxExclusive) => min + Math.floor(rand() * (maxExclusive - min));
+
+  let attack = nextInt(10, 31);
+  let defense = nextInt(5, 21);
+  let speed = nextInt(5, 21);
+  const maxHp = 100;
+  const hp = maxHp;
+
+  const element = ELEMENT_TYPES[nextInt(0, ELEMENT_TYPES.length)];
+
+  const skillType = SKILL_TYPES[nextInt(0, SKILL_TYPES.length)];
+  const ratio = 0.2 + rand() * 0.3; // 0.2〜0.5
+  const skillName = SKILL_NAME_MAP[skillType];
+  const skillDescription = buildSkillDescription(skillType, ratio);
+
+  const isMutation = rand() < 0.05; // 突然変異(5%)
+  let finalName = characterName;
+  if (isMutation) {
+    const roll = nextInt(0, 3);
+    if (roll === 0) attack = Math.round(attack * 1.5);
+    else if (roll === 1) defense = Math.round(defense * 1.5);
+    else speed = Math.round(speed * 1.5);
+    finalName = "★" + finalName;
+  }
+
+  return {
+    status: "ok",
+    characterName: finalName,
+    element,
+    attack,
+    defense,
+    speed,
+    hp,
+    maxHp,
+    isMutation,
+    skillName,
+    skillDescription,
+  };
+}
 
 const statusEl = document.getElementById("status");
 const debugLogEl = document.getElementById("debug-log");
@@ -43,8 +124,6 @@ let scanner = null;
 let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
 let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち（この間はスキャン結果を無視する）
 let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
-let activeResultRef = null; // 結果待ち中のFirebase参照（タイムアウト時等に購読解除するため保持）
-let resultTimeoutHandle = null;
 
 // Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
 const ELEMENT_LABELS = {
@@ -195,8 +274,6 @@ function showNameInput(cardData) {
 
 /// 名前入力画面・ステータス表示画面を閉じて、スキャン待ち状態に戻す
 function resetToScanning() {
-  cleanupResultListener();
-
   isAwaitingName = false;
   scannedCardData = null;
 
@@ -204,18 +281,6 @@ function resetToScanning() {
   statusDisplaySectionEl.style.display = "none";
   readerEl.style.display = "block";
   setStatus("QRコードをカメラにかざしてください");
-}
-
-/// 結果待ちの購読とタイムアウトタイマーを片付ける
-function cleanupResultListener() {
-  if (activeResultRef) {
-    activeResultRef.off();
-    activeResultRef = null;
-  }
-  if (resultTimeoutHandle) {
-    clearTimeout(resultTimeoutHandle);
-    resultTimeoutHandle = null;
-  }
 }
 
 /// Unityから返ってきたキャラクターステータスを画面に表示する
@@ -246,66 +311,27 @@ registerBtn.addEventListener("click", () => {
   if (isSending) return;
   isSending = true;
   registerBtn.disabled = true;
-  setStatus("登録中...パソコン側で処理されるまでお待ちください");
+  setStatus("登録中...");
 
-  const pendingRef = db.ref("pendingRegistrations").push();
-  const payload = {
-    cardId: scannedCardData.cardId,
-    seed: scannedCardData.seed,
-    characterName: name,
-    timestamp: Date.now(),
-  };
+  const stats = generateCharacterStats(scannedCardData.seed, name);
 
-  pendingRef
-    .set(payload)
-    .then(() => {
-      logDebug("Firebaseへ書き込みました: " + JSON.stringify(payload));
-      waitForResult(pendingRef.key);
+  // 記録として保存しておく(将来Unity側で読み込んで使う場合などに利用できる)。
+  // 保存に失敗しても、スマホ側の表示自体は続行してよい。
+  db.ref("characters")
+    .push({
+      cardId: scannedCardData.cardId,
+      seed: scannedCardData.seed,
+      timestamp: Date.now(),
+      ...stats,
     })
     .catch((e) => {
-      setStatus("Firebaseへの送信に失敗しました: " + e.message, "error");
-      logDebug("エラー(Firebase書き込み): " + e);
-      isSending = false;
-      registerBtn.disabled = false;
+      logDebug("エラー(Firebase保存、表示は続行します): " + e);
     });
+
+  showStatusDisplay(stats);
+  isSending = false;
+  registerBtn.disabled = false;
 });
-
-/// pendingRegistrationsへの書き込み後、対応する results/{key} をリアルタイムで購読し、
-/// Unity側の処理結果が書き込まれたらステータス画面を表示する。
-function waitForResult(key) {
-  const resultRef = db.ref("results/" + key);
-  activeResultRef = resultRef;
-
-  resultTimeoutHandle = setTimeout(() => {
-    cleanupResultListener();
-    setStatus(
-      "パソコン側からの応答がありませんでした。Unity(QRScanシーン)が起動しているか確認してください。",
-      "error"
-    );
-    logDebug("エラー: results/" + key + " の待受がタイムアウトしました");
-    isSending = false;
-    registerBtn.disabled = false;
-  }, RESULT_TIMEOUT_MS);
-
-  resultRef.on("value", (snapshot) => {
-    const data = snapshot.val();
-    if (!data) return; // まだUnity側が処理していない
-
-    cleanupResultListener();
-    isSending = false;
-    registerBtn.disabled = false;
-
-    if (data.status === "ok") {
-      showStatusDisplay(data);
-    } else {
-      setStatus("登録に失敗しました（" + (data.message || "不明なエラー") + "）", "error");
-      logDebug("エラー(登録): " + (data.message || "不明なエラー"));
-    }
-
-    // 結果ノードは表示に使い終わったら消してよい(Firebase側の掃除)
-    resultRef.remove().catch(() => {});
-  });
-}
 
 rescanBtn.addEventListener("click", () => {
   resetToScanning();
