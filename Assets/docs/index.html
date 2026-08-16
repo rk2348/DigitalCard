@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>オリサモ カードスキャン</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>オリサモ カードスキャン</h1>
+
+    <div id="reader"></div>
+
+    <div id="name-input-section" class="name-input-section" style="display: none;">
+      <p class="scanned-card-label">カードID: <span id="scanned-card-id"></span></p>
+      <label for="character-name">キャラクターの名前</label>
+      <input type="text" id="character-name" placeholder="なまえを入力" maxlength="20" />
+      <div class="name-input-buttons">
+        <button id="register-btn">登録する</button>
+        <button id="rescan-btn" class="secondary">もう一度スキャンする</button>
+      </div>
+    </div>
+
+    <div id="status-display-section" class="status-display-section" style="display: none;">
+      <p id="mutation-badge" class="mutation-badge" style="display: none;">★突然変異カード★</p>
+      <h2 id="result-character-name" class="result-character-name"></h2>
+      <p id="result-element" class="result-element"></p>
+
+      <div class="stat-bars">
+        <div class="stat-row">
+          <span class="stat-label">攻撃力</span>
+          <span id="result-attack" class="stat-value"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">防御力</span>
+          <span id="result-defense" class="stat-value"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">素早さ</span>
+          <span id="result-speed" class="stat-value"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">HP</span>
+          <span id="result-hp" class="stat-value"></span>
+        </div>
+      </div>
+
+      <div class="skill-box">
+        <p id="result-skill-name" class="skill-name"></p>
+        <p id="result-skill-description" class="skill-description"></p>
+      </div>
+
+      <button id="next-scan-btn">つぎのカードをスキャン</button>
+    </div>
+
+    <div id="status" class="status">サーバーのアドレスを設定してください</div>
+
+    <pre id="debug-log" class="debug-log"></pre>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-database-compat.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
