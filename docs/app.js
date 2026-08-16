@@ -109,13 +109,21 @@ const characterNameInput = document.getElementById("character-name");
 const registerBtn = document.getElementById("register-btn");
 const rescanBtn = document.getElementById("rescan-btn");
 const statusDisplaySectionEl = document.getElementById("status-display-section");
+const revealCardEl = document.getElementById("reveal-card");
+const sparkleLayerEl = document.getElementById("sparkle-layer");
 const mutationBadgeEl = document.getElementById("mutation-badge");
+const elementChipEl = document.getElementById("element-chip");
+const elementIconEl = document.getElementById("element-icon");
 const resultCharacterNameEl = document.getElementById("result-character-name");
 const resultElementEl = document.getElementById("result-element");
 const resultAttackEl = document.getElementById("result-attack");
 const resultDefenseEl = document.getElementById("result-defense");
 const resultSpeedEl = document.getElementById("result-speed");
 const resultHpEl = document.getElementById("result-hp");
+const barAttackEl = document.getElementById("bar-attack");
+const barDefenseEl = document.getElementById("bar-defense");
+const barSpeedEl = document.getElementById("bar-speed");
+const barHpEl = document.getElementById("bar-hp");
 const resultSkillNameEl = document.getElementById("result-skill-name");
 const resultSkillDescriptionEl = document.getElementById("result-skill-description");
 const nextScanBtn = document.getElementById("next-scan-btn");
@@ -134,6 +142,18 @@ const ELEMENT_LABELS = {
   Earth: "土",
   Light: "光",
 };
+
+const ELEMENT_ICONS = {
+  Fire: "🔥",
+  Wind: "🌪️",
+  Thunder: "⚡",
+  Water: "💧",
+  Earth: "🪨",
+  Light: "✨",
+};
+
+// ステータスバーを何%まで伸ばすかの基準値(突然変異で1.5倍された値でも収まる余裕を持たせている)
+const BAR_MAX = { attack: 45, defense: 30, speed: 30, hp: 100 };
 
 let db = null;
 
@@ -283,11 +303,17 @@ function resetToScanning() {
   setStatus("QRコードをカメラにかざしてください");
 }
 
-/// Unityから返ってきたキャラクターステータスを画面に表示する
+/// Unityから返ってきたキャラクターステータスを、カードをめくる演出とともに表示する
 function showStatusDisplay(stats) {
+  // 表示前に演出用の状態をリセットしておく(2回目以降のスキャンでも正しく再生されるように)
+  revealCardEl.classList.remove("flipped", "mutation");
+  sparkleLayerEl.innerHTML = "";
+  [barAttackEl, barDefenseEl, barSpeedEl, barHpEl].forEach((el) => (el.style.width = "0%"));
+
   mutationBadgeEl.style.display = stats.isMutation ? "block" : "none";
   resultCharacterNameEl.textContent = stats.characterName;
-  resultElementEl.textContent = "属性: " + (ELEMENT_LABELS[stats.element] || stats.element);
+  resultElementEl.textContent = ELEMENT_LABELS[stats.element] || stats.element;
+  elementIconEl.textContent = ELEMENT_ICONS[stats.element] || "";
   resultAttackEl.textContent = stats.attack;
   resultDefenseEl.textContent = stats.defense;
   resultSpeedEl.textContent = stats.speed;
@@ -297,7 +323,40 @@ function showStatusDisplay(stats) {
 
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "block";
-  setStatus(stats.characterName + " が誕生した！", "success");
+  setStatus("封を開いています...");
+
+  // 少し間を置いてからカードをめくる(名前入力→即切り替わりだと演出が伝わらないため)
+  setTimeout(() => {
+    if (stats.isMutation) {
+      revealCardEl.classList.add("mutation");
+    }
+    revealCardEl.classList.add("flipped");
+
+    // めくり終わるタイミングでステータスバーを伸ばす
+    setTimeout(() => {
+      barAttackEl.style.width = Math.min(100, (stats.attack / BAR_MAX.attack) * 100) + "%";
+      barDefenseEl.style.width = Math.min(100, (stats.defense / BAR_MAX.defense) * 100) + "%";
+      barSpeedEl.style.width = Math.min(100, (stats.speed / BAR_MAX.speed) * 100) + "%";
+      barHpEl.style.width = Math.min(100, (stats.hp / BAR_MAX.hp) * 100) + "%";
+
+      spawnSparkles(stats.isMutation ? 14 : 6);
+      setStatus(stats.characterName + " が誕生した！", "success");
+    }, 550);
+  }, 250);
+}
+
+/// カードめくりの瞬間に、キラキラした演出用の要素を数個ランダムな位置に散らす
+function spawnSparkles(count) {
+  const glyphs = ["✦", "✧", "★"];
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("span");
+    el.className = "sparkle";
+    el.textContent = glyphs[Math.floor(Math.random() * glyphs.length)];
+    el.style.left = Math.random() * 100 + "%";
+    el.style.top = Math.random() * 100 + "%";
+    el.style.animationDelay = Math.random() * 300 + "ms";
+    sparkleLayerEl.appendChild(el);
+  }
 }
 
 registerBtn.addEventListener("click", () => {

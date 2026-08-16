@@ -1,202 +1,480 @@
+:root {
+  --ink-void: #0b0b1f;
+  --ink-deep: #15152f;
+  --ink-panel: #1c1c3d;
+  --ink-panel-soft: #22224a;
+  --gold-foil: #f0c674;
+  --gold-foil-dim: rgba(240, 198, 116, 0.35);
+  --mist-white: #f5f0e6;
+  --mist-dim: #a9a6c2;
+  --mutation-violet: #b67cff;
+  --success: #4ade80;
+  --danger: #ff6b6b;
+
+  --font-display: "Shippori Mincho", serif;
+  --font-body: "Zen Kaku Gothic New", sans-serif;
+}
+
 * {
   box-sizing: border-box;
 }
 
+html {
+  background: var(--ink-void);
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
-  background: #1a1a2e;
-  color: #eee;
+  font-family: var(--font-body);
+  background: var(--ink-void);
+  color: var(--mist-white);
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* 背景にゆっくり漂うオーロラ状の光。派手にしすぎず、儀式めいた静けさを保つ */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.22;
+  z-index: 0;
+  pointer-events: none;
+}
+
+body::before {
+  top: -20vmax;
+  left: -15vmax;
+  background: radial-gradient(circle, #4b3a8a 0%, transparent 70%);
+  animation: driftA 22s ease-in-out infinite;
+}
+
+body::after {
+  bottom: -25vmax;
+  right: -15vmax;
+  background: radial-gradient(circle, var(--gold-foil-dim) 0%, transparent 70%);
+  animation: driftB 26s ease-in-out infinite;
+}
+
+@keyframes driftA {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(6vmax, 4vmax); }
+}
+
+@keyframes driftB {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-5vmax, -6vmax); }
 }
 
 .container {
+  position: relative;
+  z-index: 1;
   max-width: 480px;
   margin: 0 auto;
   padding: 16px;
 }
 
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  margin: 8px auto 4px;
+  border-radius: 50%;
+  border: 1px solid var(--gold-foil-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: var(--gold-foil);
+  font-size: 1.1rem;
+  animation: crestGlow 3.5s ease-in-out infinite;
+}
+
+@keyframes crestGlow {
+  0%, 100% { box-shadow: 0 0 0 rgba(240, 198, 116, 0); }
+  50% { box-shadow: 0 0 18px rgba(240, 198, 116, 0.35); }
+}
+
 h1 {
-  font-size: 1.25rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.15rem;
   text-align: center;
-  margin: 12px 0 20px;
+  letter-spacing: 0.08em;
+  margin: 0 0 20px;
+  color: var(--mist-white);
 }
 
 #reader {
-  border-radius: 12px;
+  border-radius: 16px;
   overflow: hidden;
+  border: 1px solid var(--gold-foil-dim);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 12px 30px rgba(0, 0, 0, 0.4);
 }
 
+/* ---------- 名前入力 ---------- */
+
 .name-input-section {
-  background: #16213e;
-  border-radius: 12px;
-  padding: 16px;
-  margin-top: 12px;
+  background: linear-gradient(160deg, var(--ink-panel), var(--ink-deep));
+  border: 1px solid var(--gold-foil-dim);
+  border-radius: 16px;
+  padding: 20px 18px;
+  margin-top: 14px;
 }
 
 .scanned-card-label {
-  font-size: 0.8rem;
-  color: #999;
-  margin: 0 0 12px;
+  font-size: 0.75rem;
+  color: var(--mist-dim);
+  letter-spacing: 0.05em;
+  margin: 0 0 14px;
 }
 
 .name-input-section label {
   display: block;
-  font-size: 0.9rem;
-  margin-bottom: 8px;
-  color: #ccc;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  margin-bottom: 10px;
+  color: var(--gold-foil);
 }
 
 .name-input-section input {
   width: 100%;
-  padding: 12px;
-  border-radius: 8px;
-  border: none;
-  margin-bottom: 14px;
+  padding: 13px;
+  border-radius: 10px;
+  border: 1px solid var(--gold-foil-dim);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--mist-white);
+  margin-bottom: 16px;
   font-size: 1.1rem;
+  font-family: var(--font-body);
   text-align: center;
+}
+
+.name-input-section input::placeholder {
+  color: var(--mist-dim);
+}
+
+.name-input-section input:focus {
+  outline: none;
+  border-color: var(--gold-foil);
+  box-shadow: 0 0 0 3px rgba(240, 198, 116, 0.15);
 }
 
 .name-input-buttons {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .name-input-buttons button {
   width: 100%;
-  padding: 12px;
-  border-radius: 8px;
+  padding: 14px;
+  border-radius: 10px;
   border: none;
-  font-weight: bold;
+  font-weight: 700;
+  font-family: var(--font-body);
   font-size: 1rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
 }
 
 #register-btn {
-  background: #e94560;
-  color: white;
+  background: linear-gradient(135deg, var(--gold-foil), #d99a3f);
+  color: #241705;
+  box-shadow: 0 6px 20px rgba(240, 198, 116, 0.25);
 }
 
 #register-btn:disabled {
-  background: #6b3540;
-  color: #ccc;
+  background: #6b5a3a;
+  color: #d8cfba;
+  box-shadow: none;
 }
 
 .name-input-buttons button.secondary {
   background: transparent;
-  color: #999;
-  border: 1px solid #444;
-  font-weight: normal;
+  color: var(--mist-dim);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font-weight: 500;
 }
 
+/* ---------- 開封演出（サイン要素） ---------- */
+
 .status-display-section {
-  background: #16213e;
-  border-radius: 12px;
-  padding: 20px 16px;
-  margin-top: 12px;
+  margin-top: 14px;
   text-align: center;
 }
 
+.reveal-stage {
+  position: relative;
+  perspective: 1400px;
+  padding: 12px 0 6px;
+}
+
+.reveal-card {
+  width: min(78vw, 300px);
+  aspect-ratio: 3 / 4.2;
+  margin: 0 auto;
+}
+
+.reveal-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.9s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.reveal-card.flipped .reveal-card-inner {
+  transform: rotateY(180deg);
+}
+
+.reveal-card-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  border-radius: 18px;
+  padding: 20px 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.reveal-card-back {
+  background: linear-gradient(150deg, var(--ink-panel), var(--ink-deep));
+  border: 1.5px solid var(--gold-foil-dim);
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.crest-glyph {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 3.2rem;
+  color: var(--gold-foil);
+  opacity: 0.9;
+  animation: crestPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes crestPulse {
+  0%, 100% { transform: scale(1); opacity: 0.75; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+.crest-caption {
+  font-size: 0.7rem;
+  letter-spacing: 0.25em;
+  color: var(--mist-dim);
+  margin: 0;
+}
+
+.reveal-card-front {
+  background: linear-gradient(165deg, var(--ink-panel-soft), #0f0f24);
+  border: 1.5px solid var(--gold-foil);
+  transform: rotateY(180deg);
+  text-align: left;
+  overflow-y: auto;
+  box-shadow: 0 0 30px rgba(240, 198, 116, 0.12);
+}
+
+.reveal-card.mutation .reveal-card-front {
+  border-color: var(--mutation-violet);
+  box-shadow: 0 0 36px rgba(182, 124, 255, 0.45);
+  animation: mutationPulse 2s ease-in-out infinite;
+}
+
+@keyframes mutationPulse {
+  0%, 100% { box-shadow: 0 0 26px rgba(182, 124, 255, 0.35); }
+  50% { box-shadow: 0 0 44px rgba(182, 124, 255, 0.6); }
+}
+
 .mutation-badge {
-  color: #ffd54f;
-  font-weight: bold;
+  color: var(--mutation-violet);
+  font-weight: 700;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
   margin: 0 0 8px;
+}
+
+.element-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.78rem;
+  color: var(--mist-dim);
+  margin-bottom: 10px;
+  width: fit-content;
+}
+
+.element-icon {
   font-size: 0.9rem;
 }
 
 .result-character-name {
-  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-weight: 700;
   font-size: 1.4rem;
-}
-
-.result-element {
-  margin: 0 0 16px;
-  color: #aaa;
-  font-size: 0.9rem;
+  margin: 0 0 14px;
+  color: var(--mist-white);
+  line-height: 1.3;
 }
 
 .stat-bars {
-  text-align: left;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .stat-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 8px 4px;
-  border-bottom: 1px solid #22335a;
-  font-size: 1rem;
-}
-
-.stat-row:last-child {
-  border-bottom: none;
+  display: grid;
+  grid-template-columns: 3.6em 1fr 2.4em;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.85rem;
 }
 
 .stat-label {
-  color: #ccc;
+  color: var(--mist-dim);
+}
+
+.stat-bar-track {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.stat-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--gold-foil), #ffe3a3);
+  transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .stat-value {
-  font-weight: bold;
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .skill-box {
-  background: #0d1730;
-  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   padding: 12px;
-  margin-bottom: 16px;
-  text-align: left;
 }
 
 .skill-name {
   margin: 0 0 4px;
-  font-weight: bold;
-  color: #e94560;
+  font-weight: 700;
+  color: var(--gold-foil);
+  font-size: 0.9rem;
 }
 
 .skill-description {
   margin: 0;
-  font-size: 0.85rem;
-  color: #ccc;
+  font-size: 0.78rem;
+  color: var(--mist-dim);
+  line-height: 1.5;
+}
+
+/* スパークル演出。カードめくり時に短く弾ける */
+.sparkle-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.sparkle {
+  position: absolute;
+  font-size: 1rem;
+  color: var(--gold-foil);
+  opacity: 0;
+  animation: sparklePop 900ms ease-out forwards;
+}
+
+.reveal-card.mutation ~ .sparkle-layer .sparkle {
+  color: var(--mutation-violet);
+}
+
+@keyframes sparklePop {
+  0% { opacity: 0; transform: scale(0.3) translateY(0); }
+  35% { opacity: 1; transform: scale(1.1) translateY(-6px); }
+  100% { opacity: 0; transform: scale(0.6) translateY(-22px); }
 }
 
 #next-scan-btn {
   width: 100%;
-  padding: 12px;
-  border-radius: 8px;
+  padding: 14px;
+  border-radius: 10px;
   border: none;
-  background: #e94560;
-  color: white;
-  font-weight: bold;
+  background: linear-gradient(135deg, var(--gold-foil), #d99a3f);
+  color: #241705;
+  font-weight: 700;
   font-size: 1rem;
+  letter-spacing: 0.04em;
+  margin-top: 16px;
+  cursor: pointer;
 }
+
+/* ---------- ステータス表示（下部の短いメッセージ） ---------- */
 
 .status {
   text-align: center;
-  padding: 14px;
-  margin-top: 12px;
-  border-radius: 8px;
-  background: #16213e;
-  font-size: 0.95rem;
+  padding: 12px;
+  margin-top: 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+  color: var(--mist-dim);
 }
 
 .status.success {
-  background: #1f7a4d;
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.25);
+  color: var(--success);
 }
 
 .status.error {
-  background: #a13a3a;
+  background: rgba(255, 107, 107, 0.1);
+  border-color: rgba(255, 107, 107, 0.25);
+  color: var(--danger);
 }
 
 .debug-log {
   display: none;
   margin-top: 12px;
   padding: 10px;
-  background: #0d0d1a;
+  background: rgba(0, 0, 0, 0.4);
   color: #8f8;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   border-radius: 8px;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 200px;
+  max-height: 180px;
   overflow-y: auto;
+}
+
+/* アニメーションを抑えたい人向け */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after,
+  .brand-mark,
+  .crest-glyph,
+  .reveal-card.mutation .reveal-card-front {
+    animation: none !important;
+  }
+  .reveal-card-inner,
+  .stat-bar-fill {
+    transition: none !important;
+  }
 }

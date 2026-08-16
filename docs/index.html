@@ -4,51 +4,82 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>オリサモ カードスキャン</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700;800&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
+    rel="stylesheet"
+  />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="container">
+    <div class="brand-mark">織</div>
     <h1>オリサモ カードスキャン</h1>
 
     <div id="reader"></div>
 
     <div id="name-input-section" class="name-input-section" style="display: none;">
-      <p class="scanned-card-label">カードID: <span id="scanned-card-id"></span></p>
-      <label for="character-name">キャラクターの名前</label>
+      <p class="scanned-card-label">カードID <span id="scanned-card-id"></span></p>
+      <label for="character-name">この一枚に、名を刻む</label>
       <input type="text" id="character-name" placeholder="なまえを入力" maxlength="20" />
       <div class="name-input-buttons">
-        <button id="register-btn">登録する</button>
+        <button id="register-btn">封を開ける</button>
         <button id="rescan-btn" class="secondary">もう一度スキャンする</button>
       </div>
     </div>
 
     <div id="status-display-section" class="status-display-section" style="display: none;">
-      <p id="mutation-badge" class="mutation-badge" style="display: none;">★突然変異カード★</p>
-      <h2 id="result-character-name" class="result-character-name"></h2>
-      <p id="result-element" class="result-element"></p>
+      <div class="reveal-stage">
+        <div class="reveal-card" id="reveal-card">
+          <div class="reveal-card-inner" id="reveal-card-inner">
+            <div class="reveal-card-face reveal-card-back">
+              <div class="crest-glyph">織</div>
+              <p class="crest-caption">ORISAMO CARD</p>
+            </div>
 
-      <div class="stat-bars">
-        <div class="stat-row">
-          <span class="stat-label">攻撃力</span>
-          <span id="result-attack" class="stat-value"></span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">防御力</span>
-          <span id="result-defense" class="stat-value"></span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">素早さ</span>
-          <span id="result-speed" class="stat-value"></span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-label">HP</span>
-          <span id="result-hp" class="stat-value"></span>
-        </div>
-      </div>
+            <div class="reveal-card-face reveal-card-front">
+              <p id="mutation-badge" class="mutation-badge" style="display: none;">★ 突然変異 ★</p>
 
-      <div class="skill-box">
-        <p id="result-skill-name" class="skill-name"></p>
-        <p id="result-skill-description" class="skill-description"></p>
+              <div class="element-chip" id="element-chip">
+                <span id="element-icon" class="element-icon"></span>
+                <span id="result-element"></span>
+              </div>
+
+              <h2 id="result-character-name" class="result-character-name"></h2>
+
+              <div class="stat-bars">
+                <div class="stat-row">
+                  <span class="stat-label">攻撃力</span>
+                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-attack"></div></div>
+                  <span id="result-attack" class="stat-value"></span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">防御力</span>
+                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-defense"></div></div>
+                  <span id="result-defense" class="stat-value"></span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">素早さ</span>
+                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-speed"></div></div>
+                  <span id="result-speed" class="stat-value"></span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">HP</span>
+                  <div class="stat-bar-track"><div class="stat-bar-fill" id="bar-hp"></div></div>
+                  <span id="result-hp" class="stat-value"></span>
+                </div>
+              </div>
+
+              <div class="skill-box">
+                <p id="result-skill-name" class="skill-name"></p>
+                <p id="result-skill-description" class="skill-description"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sparkle-layer" id="sparkle-layer"></div>
       </div>
 
       <button id="next-scan-btn">つぎのカードをスキャン</button>
