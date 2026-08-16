@@ -10,16 +10,6 @@
   <div class="container">
     <h1>オリサモ カードスキャン</h1>
 
-    <div id="server-setup">
-      <label for="server-url">Unityサーバーのアドレス</label>
-      <input type="text" id="server-url" placeholder="http://192.168.1.10:8080" />
-      <button id="save-server-btn">保存してスキャン開始</button>
-      <p class="hint">
-        パソコンでUnity（QRScanシーン）を起動すると画面にアドレスが表示されます。<br />
-        それをそのまま入力してください。一度保存すれば次回から入力不要です。
-      </p>
-    </div>
-
     <div id="reader"></div>
 
     <div id="name-input-section" class="name-input-section" style="display: none;">
@@ -64,11 +54,13 @@
       <button id="next-scan-btn">つぎのカードをスキャン</button>
     </div>
 
-    <div id="status" class="status">サーバーのアドレスを設定してください</div>
+    <div id="status" class="status">読み込み中...</div>
 
     <pre id="debug-log" class="debug-log"></pre>
   </div>
 
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-database-compat.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="app.js"></script>
 </body>
