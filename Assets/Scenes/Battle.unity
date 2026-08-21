@@ -227,7 +227,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2dca3fb491f446e42a4756377299e918, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BattleCardIntake
-  databaseUrl: https://console.firebase.google.com/u/0/project/digitalcard-b825d/database/digitalcard-b825d-default-rtdb/data
+  databaseUrl: https://digitalcard-b825d-default-rtdb.firebaseio.com
   qrScanner: {fileID: 159706387}
   intakePanel: {fileID: 0}
   statusText: {fileID: 0}
