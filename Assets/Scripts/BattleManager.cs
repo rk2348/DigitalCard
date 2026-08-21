@@ -114,11 +114,12 @@ public class BattleManager : MonoBehaviour
     [Range(0f, 1f)]
     [SerializeField] private float aiSpecialBias = 0.4f;
 
-    [Header("参戦カードのQRスキャン(任意)")]
-    [Tooltip("設定すると、バトル開始前に「自分のカードをQRスキャンして参戦する」フェーズが入り、" +
-             "スキャンしたカードのステータス・スキル・実物写真がそのままプレイヤーキャラクターになる。" +
-             "未設定の場合は従来通りGameManagerに保存済みのキャラクター(無ければ自動生成)を使う。")]
-    [SerializeField] private BattleCardIntake playerCardIntake;
+    [Header("対戦キュー(スマホ側の登録待ち・任意)")]
+    [Tooltip("設定すると、バトル開始前に「スマホ側で2台分の対戦登録(battleSlots)が揃うのを待つ」" +
+             "フェーズが入り、2人分のステータス・スキル・実物写真がそのままプレイヤー1/2になる。" +
+             "PC側でQRコードを読み取ることはない(スマホ側で完結する設計)。" +
+             "未設定の場合は従来通りGameManagerに保存済みのキャラクター(無ければ自動生成)対ランダム敵で動作する。")]
+    [SerializeField] private BattleQueueIntake battleQueueIntake;
 
     private CharacterStats player;
     private CharacterStats enemy;
@@ -139,28 +140,32 @@ public class BattleManager : MonoBehaviour
             return;
         }
 
-        if (playerCardIntake != null)
+        if (battleQueueIntake != null)
         {
-            // プレイヤーが自分のカードをQRスキャンするまで待機する。
-            // 読み込みが完了したらHandlePlayerCardReady経由でBeginBattle()が呼ばれる。
-            playerCardIntake.OnCharacterReady += HandlePlayerCardReady;
+            // スマホ側で2台分の対戦登録(battleSlots)が揃うまで待機する。
+            // 揃ったらHandleMatchReady経由でBeginBattle()が呼ばれる。
+            battleQueueIntake.OnMatchReady += HandleMatchReady;
             return;
         }
 
+        // フォールバック(スマホでの対戦キューを使わない単体テスト用): 従来通り
+        // GameManager保存済みキャラクター(無ければ自動生成)対ランダム生成の敵、で開始する。
         player = ResolveFallbackPlayer();
+        enemy = new CharacterStats("敵キャラクター");
+        enemy.AssignRandomStats();
         BeginBattle();
     }
 
     private void OnDestroy()
     {
-        if (playerCardIntake != null)
+        if (battleQueueIntake != null)
         {
-            playerCardIntake.OnCharacterReady -= HandlePlayerCardReady;
+            battleQueueIntake.OnMatchReady -= HandleMatchReady;
         }
     }
 
     /// <summary>
-    /// QRスキャンによる参戦を使わない場合のプレイヤーキャラクター解決。
+    /// 対戦キューを使わない場合のプレイヤーキャラクター解決(フォールバック用)。
     /// GameManagerに保存済みのキャラクターがあればそれを、無ければ従来通りランダム生成する。
     /// </summary>
     private CharacterStats ResolveFallbackPlayer()
@@ -178,26 +183,24 @@ public class BattleManager : MonoBehaviour
     }
 
     /// <summary>
-    /// BattleCardIntakeがQRスキャン経由でプレイヤーキャラクター(写真つき)を読み込み終えた時に呼ばれる。
+    /// BattleQueueIntakeがbattleSlotsの2枠(スマホ側で登録済みの2人)を読み込み終えた時に呼ばれる。
+    /// どちらも実在プレイヤーの実物写真つきキャラクターであり、片方をAIで自動生成することはない。
     /// </summary>
-    private void HandlePlayerCardReady(CharacterStats scannedPlayer)
+    private void HandleMatchReady(CharacterStats player1, CharacterStats player2)
     {
-        playerCardIntake.OnCharacterReady -= HandlePlayerCardReady;
+        battleQueueIntake.OnMatchReady -= HandleMatchReady;
 
-        player = scannedPlayer;
-        GameManager.Instance.SavePlayerCharacter(player);
+        player = player1;
+        enemy = player2;
 
         BeginBattle();
     }
 
     /// <summary>
-    /// プレイヤーキャラクターが確定した後の共通初期化処理(敵生成〜バトル開始)。
+    /// player・enemyが確定した後の共通初期化処理(アイコン生成〜バトル開始)。
     /// </summary>
     private void BeginBattle()
     {
-        enemy = new CharacterStats("敵キャラクター");
-        enemy.AssignRandomStats();
-
         SpawnIcons();
         SetupCharacterDisplay();
         SetupButtons();

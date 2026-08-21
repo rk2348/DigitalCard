@@ -685,6 +685,70 @@ skipPhotoBtn.addEventListener("click", () => {
   showNameInput(scannedCardData);
 });
 
+/// 対戦キュー(battleSlots/player1, battleSlots/player2)への参加。
+/// PC(Unity)側は一切QRコードを読み取らず、この2枠が両方埋まるのをポーリングで
+/// 待つだけの設計にしている。2台のスマホがほぼ同時に登録した場合の競合を避けるため、
+/// 単純なset()ではなくtransaction()で「今空いているか」をアトミックに確認してから書き込む。
+function joinBattleQueue(recordData) {
+  const slot1Ref = db.ref("battleSlots/player1");
+  const slot2Ref = db.ref("battleSlots/player2");
+
+  slot1Ref.transaction(
+    (current) => (current === null ? recordData : undefined), // undefinedを返すと競合とみなされ書き込まれない
+    (error, committed) => {
+      if (error) {
+        logDebug("エラー(battleSlots/player1のtransaction): " + error);
+        return;
+      }
+      if (committed) {
+        onJoinedBattleQueue("player1");
+        return;
+      }
+
+      // player1が既に埋まっていた場合はplayer2を試す
+      slot2Ref.transaction(
+        (current) => (current === null ? recordData : undefined),
+        (error2, committed2) => {
+          if (error2) {
+            logDebug("エラー(battleSlots/player2のtransaction): " + error2);
+            return;
+          }
+          if (committed2) {
+            onJoinedBattleQueue("player2");
+          } else {
+            setStatus("現在、対戦の順番待ちが満席です。少し待ってからもう一度お試しください", "error");
+          }
+        }
+      );
+    }
+  );
+}
+
+/// 対戦キューへの参加に成功した後、相手が揃うまでの状況をリアルタイムに表示する。
+/// PC側が試合成立と判定するとbattleSlotsをクリアするので、それを検知したら
+/// 「対戦が始まりました」と表示してリスナーを解除する。
+function onJoinedBattleQueue(mySlot) {
+  const slotLabel = mySlot === "player1" ? "プレイヤー1" : "プレイヤー2";
+  setStatus(`対戦キューに参加しました(${slotLabel})。相手を待っています…`, "success");
+
+  const slotsRef = db.ref("battleSlots");
+  const handler = slotsRef.on("value", (snapshot) => {
+    const slots = snapshot.val();
+
+    if (slots && slots.player1 && slots.player2) {
+      setStatus("対戦相手が見つかりました！PC画面をご覧ください", "success");
+      return;
+    }
+
+    // 自分が登録したはずのスロットが消えている ＝ PC側で試合が成立し、
+    // 次の組のためにリセットされた合図
+    if (!slots || !slots[mySlot]) {
+      setStatus("対戦が始まりました。PC画面をご覧ください！", "success");
+      slotsRef.off("value", handler);
+    }
+  });
+}
+
 registerBtn.addEventListener("click", () => {
   const name = characterNameInput.value.trim();
   if (!name) {
@@ -730,6 +794,11 @@ registerBtn.addEventListener("click", () => {
     .catch((e) => {
       logDebug("エラー(characterByCard保存、表示は続行します): " + e);
     });
+
+  // 対戦キューへの参加。PC(Unity)側は一切QRコードを読み取らず、
+  // battleSlots/player1・player2の両方が埋まるのをポーリングで待つだけの設計にしたため、
+  // 「スマホでの登録」がそのまま「対戦への参加」を兼ねる。
+  joinBattleQueue(recordData);
 
   showStatusDisplay(stats);
   isSending = false;
