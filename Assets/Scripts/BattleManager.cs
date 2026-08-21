@@ -114,6 +114,12 @@ public class BattleManager : MonoBehaviour
     [Range(0f, 1f)]
     [SerializeField] private float aiSpecialBias = 0.4f;
 
+    [Header("参戦カードのQRスキャン(任意)")]
+    [Tooltip("設定すると、バトル開始前に「自分のカードをQRスキャンして参戦する」フェーズが入り、" +
+             "スキャンしたカードのステータス・スキル・実物写真がそのままプレイヤーキャラクターになる。" +
+             "未設定の場合は従来通りGameManagerに保存済みのキャラクター(無ければ自動生成)を使う。")]
+    [SerializeField] private BattleCardIntake playerCardIntake;
+
     private CharacterStats player;
     private CharacterStats enemy;
 
@@ -133,18 +139,62 @@ public class BattleManager : MonoBehaviour
             return;
         }
 
-        if (GameManager.Instance.HasPlayerCharacter())
+        if (playerCardIntake != null)
         {
-            player = GameManager.Instance.PlayerCharacter;
-        }
-        else
-        {
-            player = new CharacterStats("プレイヤー");
-            player.AssignRandomStats();
-            GameManager.Instance.SavePlayerCharacter(player);
-            Debug.Log("キャラクター未作成だったため、ランダムキャラクターを自動生成しました。");
+            // プレイヤーが自分のカードをQRスキャンするまで待機する。
+            // 読み込みが完了したらHandlePlayerCardReady経由でBeginBattle()が呼ばれる。
+            playerCardIntake.OnCharacterReady += HandlePlayerCardReady;
+            return;
         }
 
+        player = ResolveFallbackPlayer();
+        BeginBattle();
+    }
+
+    private void OnDestroy()
+    {
+        if (playerCardIntake != null)
+        {
+            playerCardIntake.OnCharacterReady -= HandlePlayerCardReady;
+        }
+    }
+
+    /// <summary>
+    /// QRスキャンによる参戦を使わない場合のプレイヤーキャラクター解決。
+    /// GameManagerに保存済みのキャラクターがあればそれを、無ければ従来通りランダム生成する。
+    /// </summary>
+    private CharacterStats ResolveFallbackPlayer()
+    {
+        if (GameManager.Instance.HasPlayerCharacter())
+        {
+            return GameManager.Instance.PlayerCharacter;
+        }
+
+        CharacterStats fallback = new CharacterStats("プレイヤー");
+        fallback.AssignRandomStats();
+        GameManager.Instance.SavePlayerCharacter(fallback);
+        Debug.Log("キャラクター未作成だったため、ランダムキャラクターを自動生成しました。");
+        return fallback;
+    }
+
+    /// <summary>
+    /// BattleCardIntakeがQRスキャン経由でプレイヤーキャラクター(写真つき)を読み込み終えた時に呼ばれる。
+    /// </summary>
+    private void HandlePlayerCardReady(CharacterStats scannedPlayer)
+    {
+        playerCardIntake.OnCharacterReady -= HandlePlayerCardReady;
+
+        player = scannedPlayer;
+        GameManager.Instance.SavePlayerCharacter(player);
+
+        BeginBattle();
+    }
+
+    /// <summary>
+    /// プレイヤーキャラクターが確定した後の共通初期化処理(敵生成〜バトル開始)。
+    /// </summary>
+    private void BeginBattle()
+    {
         enemy = new CharacterStats("敵キャラクター");
         enemy.AssignRandomStats();
 

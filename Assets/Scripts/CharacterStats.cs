@@ -31,6 +31,15 @@ public class CharacterStats
     public bool isMutation;
 
     /// <summary>
+    /// スマホで撮影・背景切り抜きした実物の写真(バトル画面などでの表示用)。
+    /// QRコードやFirebaseへのJSONシリアライズ対象ではなく、あくまで実行時にだけ
+    /// (BattleCardIntakeなどが)セットする表示用データなので、[NonSerialized]にして
+    /// ToJson()/FromJson()の対象から除外している。
+    /// </summary>
+    [NonSerialized]
+    public Sprite photoSprite;
+
+    /// <summary>
     /// QRコードのデータ形式バージョン。
     /// 将来ステータス構造(属性やスキルの種類など)を変更した際に、
     /// 古いカードのQRを読んだ時の互換性チェックに使用する。

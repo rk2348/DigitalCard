@@ -197,6 +197,76 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 109277504}
   m_CullTransparentMesh: 1
+--- !u!1 &159706385
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 159706388}
+  - component: {fileID: 159706387}
+  - component: {fileID: 159706386}
+  m_Layer: 0
+  m_Name: GameObject (1)
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &159706386
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 159706385}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2dca3fb491f446e42a4756377299e918, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BattleCardIntake
+  databaseUrl: https://console.firebase.google.com/u/0/project/digitalcard-b825d/database/digitalcard-b825d-default-rtdb/data
+  qrScanner: {fileID: 159706387}
+  intakePanel: {fileID: 0}
+  statusText: {fileID: 0}
+  retryCooldown: 1.5
+--- !u!114 &159706387
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 159706385}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8cc4691b89c60b7419c8e287dbdb797a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::QRCodeScanner
+  previewImage: {fileID: 0}
+  cameraStatusText: {fileID: 0}
+  scanIndicatorImage: {fileID: 0}
+  scanningColor: {r: 1, g: 1, b: 1, a: 1}
+  detectedColor: {r: 0, g: 1, b: 0, a: 1}
+  detectedColorDuration: 0.5
+  scanInterval: 0.3
+  duplicateCooldown: 2
+--- !u!4 &159706388
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 159706385}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &203832088
 GameObject:
   m_ObjectHideFlags: 0
@@ -971,6 +1041,7 @@ MonoBehaviour:
   strongMultiplier: 1.4
   specialBonusMultiplier: 1.5
   aiSpecialBias: 0.4
+  playerCardIntake: {fileID: 0}
 --- !u!4 &680430118
 Transform:
   m_ObjectHideFlags: 0
@@ -2830,3 +2901,4 @@ SceneRoots:
   - {fileID: 1412683772}
   - {fileID: 1571910887}
   - {fileID: 1709405311}
+  - {fileID: 159706388}

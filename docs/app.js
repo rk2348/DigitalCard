@@ -95,6 +95,8 @@ function generateCharacterStats(seed, characterName) {
     hp,
     maxHp,
     isMutation,
+    skillType,
+    ratio,
     skillName,
     skillDescription,
   };
@@ -718,6 +720,15 @@ registerBtn.addEventListener("click", () => {
     .push(recordData)
     .catch((e) => {
       logDebug("エラー(Firebase保存、表示は続行します): " + e);
+    });
+
+  // Unity(バトルシーン)がQRコードをスキャンした際にcardIdだけでこのキャラクターを
+  // 引けるよう、cardIdをキーにした最新スナップショットも別途保存しておく。
+  // (同じカードを登録し直した場合は上書きされ、常に最新の内容になる)
+  db.ref("characterByCard/" + scannedCardData.cardId)
+    .set(recordData)
+    .catch((e) => {
+      logDebug("エラー(characterByCard保存、表示は続行します): " + e);
     });
 
   showStatusDisplay(stats);
