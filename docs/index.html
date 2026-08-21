@@ -33,6 +33,24 @@
       </div>
     </div>
 
+    <div id="photo-capture-section" class="photo-capture-section" style="display: none;">
+      <p class="scanned-card-label">カードID <span id="photo-card-id"></span></p>
+      <p class="photo-instruction">キャラクターの実物を、なるべく無地の背景（机や紙など）の上に置いて撮影してください</p>
+
+      <div class="photo-frame">
+        <video id="photo-video" playsinline autoplay muted></video>
+        <canvas id="cutout-preview-canvas" style="display: none;"></canvas>
+      </div>
+      <canvas id="photo-capture-canvas" style="display: none;"></canvas>
+
+      <div class="name-input-buttons">
+        <button id="capture-photo-btn">撮影する</button>
+        <button id="retake-photo-btn" class="secondary" style="display: none;">撮り直す</button>
+        <button id="use-photo-btn" style="display: none;">この写真を使う</button>
+        <button id="skip-photo-btn" class="secondary">写真なしで進む</button>
+      </div>
+    </div>
+
     <div id="status-display-section" class="status-display-section" style="display: none;">
       <div class="reveal-stage">
         <div class="reveal-flash" id="reveal-flash"></div>
@@ -47,6 +65,8 @@
 
             <div class="reveal-card-face reveal-card-front">
               <img id="card-art" class="card-art" src="" alt="" />
+
+              <img id="card-character-cutout" class="card-character-cutout" src="" alt="" style="display: none;" />
 
               <p id="mutation-badge" class="mutation-badge" style="display: none;">★ 突然変異 ★</p>
 

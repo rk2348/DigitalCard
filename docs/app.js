@@ -108,6 +108,16 @@ const characterNameInput = document.getElementById("character-name");
 const registerBtn = document.getElementById("register-btn");
 const rescanBtn = document.getElementById("rescan-btn");
 const statusDisplaySectionEl = document.getElementById("status-display-section");
+const photoCaptureSectionEl = document.getElementById("photo-capture-section");
+const photoCardIdEl = document.getElementById("photo-card-id");
+const photoVideoEl = document.getElementById("photo-video");
+const photoCaptureCanvasEl = document.getElementById("photo-capture-canvas");
+const cutoutPreviewCanvasEl = document.getElementById("cutout-preview-canvas");
+const capturePhotoBtn = document.getElementById("capture-photo-btn");
+const retakePhotoBtn = document.getElementById("retake-photo-btn");
+const usePhotoBtn = document.getElementById("use-photo-btn");
+const skipPhotoBtn = document.getElementById("skip-photo-btn");
+const cardCharacterCutoutEl = document.getElementById("card-character-cutout");
 const revealCardEl = document.getElementById("reveal-card");
 const revealFlashEl = document.getElementById("reveal-flash");
 const shockwaveRingEl = document.getElementById("shockwave-ring");
@@ -129,6 +139,8 @@ let scanner = null;
 let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
 let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち（この間はスキャン結果を無視する）
 let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
+let photoStream = null; // 実物撮影用のカメラストリーム(MediaStream)
+let capturedCutoutDataUrl = null; // 背景切り抜き後のキャラクター写真(PNG, data URL)。未撮影ならnull
 
 // Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
 // 実際のカード(闇・火・光・水・地・風)に合わせてある。Thunder(雷)は実カードに存在しないため
@@ -267,7 +279,58 @@ function onScanSuccess(decodedText) {
   }
 
   scannedCardData = cardData;
-  showNameInput(cardData);
+  capturedCutoutDataUrl = null;
+  showPhotoCapture(cardData);
+}
+
+/// カード読み取り直後、実物を撮影して背景を切り抜く画面を表示する
+function showPhotoCapture(cardData) {
+  isAwaitingName = true;
+
+  photoCardIdEl.textContent = cardData.cardId;
+
+  // 表示状態を初期化(2回目以降のスキャンでも正しく表示されるように)
+  photoVideoEl.style.display = "block";
+  cutoutPreviewCanvasEl.style.display = "none";
+  capturePhotoBtn.style.display = "inline-block";
+  retakePhotoBtn.style.display = "none";
+  usePhotoBtn.style.display = "none";
+
+  readerEl.style.display = "none";
+  nameInputSectionEl.style.display = "none";
+  photoCaptureSectionEl.style.display = "block";
+  setStatus("背景がなるべく無地になるようにキャラクターを置いて撮影してください");
+
+  startPhotoCamera();
+}
+
+/// 撮影用のカメラ(通常のgetUserMedia)を起動する。
+/// QRスキャン用のHtml5Qrcodeとは別に、videoタグへ直接映像を流し込む。
+function startPhotoCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus("このブラウザは撮影に対応していません。「写真なしで進める」を押してください", "error");
+    return;
+  }
+
+  navigator.mediaDevices
+    .getUserMedia({ video: { facingMode: "environment" }, audio: false })
+    .then((stream) => {
+      photoStream = stream;
+      photoVideoEl.srcObject = stream;
+    })
+    .catch((e) => {
+      logDebug("エラー(撮影用カメラ起動): " + e);
+      setStatus("カメラを起動できませんでした。「写真なしで進める」を押してください", "error");
+    });
+}
+
+/// 撮影用のカメラストリームを停止する(名前入力画面やスキャン待ちに戻る際に呼ぶ)。
+function stopPhotoCamera() {
+  if (photoStream) {
+    photoStream.getTracks().forEach((track) => track.stop());
+    photoStream = null;
+  }
+  photoVideoEl.srcObject = null;
 }
 
 /// カード読み取り後、キャラクター名を入力してもらう画面を表示する
@@ -277,6 +340,7 @@ function showNameInput(cardData) {
   scannedCardIdEl.textContent = cardData.cardId;
   characterNameInput.value = "";
 
+  photoCaptureSectionEl.style.display = "none";
   readerEl.style.display = "none";
   nameInputSectionEl.style.display = "block";
   setStatus("キャラクターの名前を入力してください");
@@ -289,8 +353,12 @@ function showNameInput(cardData) {
 function resetToScanning() {
   isAwaitingName = false;
   scannedCardData = null;
+  capturedCutoutDataUrl = null;
+
+  stopPhotoCamera();
 
   mutationVignetteEl.classList.remove("active");
+  photoCaptureSectionEl.style.display = "none";
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "none";
   readerEl.style.display = "block";
@@ -308,6 +376,15 @@ function showStatusDisplay(stats) {
   flashBulbsEl.innerHTML = "";
 
   cardArtEl.src = ELEMENT_CARD_IMAGES[stats.element] || "";
+
+  if (capturedCutoutDataUrl) {
+    cardCharacterCutoutEl.src = capturedCutoutDataUrl;
+    cardCharacterCutoutEl.style.display = "block";
+  } else {
+    cardCharacterCutoutEl.src = "";
+    cardCharacterCutoutEl.style.display = "none";
+  }
+
   mutationBadgeEl.style.display = stats.isMutation ? "block" : "none";
   resultCharacterNameEl.textContent = stats.characterName;
   resultAttackEl.textContent = stats.attack;
@@ -380,6 +457,232 @@ function spawnSparkles(count) {
   }
 }
 
+/// 撮影した写真の背景を切り抜く(単色〜比較的シンプルな背景を想定した簡易版)。
+/// 画像の外周(四辺)から連結している「背景色に近い領域」だけを透明化するバケツ塗りつぶし方式。
+/// カード内部に背景と似た色があっても、外周とつながっていなければ消えないため、
+/// 本格的なAIセグメンテーションではないが、無地に近い背景であれば実用的な精度が出る。
+function removeBackground(ctx, width, height, tolerance = 42) {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+
+  // 背景色の推定: 四隅+各辺の中点をサンプリングして平均を取る
+  const samplePoints = [
+    [0, 0],
+    [width - 1, 0],
+    [0, height - 1],
+    [width - 1, height - 1],
+    [Math.floor(width / 2), 0],
+    [Math.floor(width / 2), height - 1],
+    [0, Math.floor(height / 2)],
+    [width - 1, Math.floor(height / 2)],
+  ];
+  let sr = 0,
+    sg = 0,
+    sb = 0;
+  for (const [x, y] of samplePoints) {
+    const i = (y * width + x) * 4;
+    sr += data[i];
+    sg += data[i + 1];
+    sb += data[i + 2];
+  }
+  const bg = [sr / samplePoints.length, sg / samplePoints.length, sb / samplePoints.length];
+
+  const idx = (x, y) => y * width + x;
+  const colorDistToBg = (i) => {
+    const p = i * 4;
+    const dr = data[p] - bg[0];
+    const dg = data[p + 1] - bg[1];
+    const db = data[p + 2] - bg[2];
+    return Math.sqrt(dr * dr + dg * dg + db * db);
+  };
+
+  const visited = new Uint8Array(width * height);
+  const removed = new Uint8Array(width * height); // フェザリング用に「透明化した画素」を記録
+  const stack = [];
+
+  for (let x = 0; x < width; x++) {
+    stack.push([x, 0]);
+    stack.push([x, height - 1]);
+  }
+  for (let y = 0; y < height; y++) {
+    stack.push([0, y]);
+    stack.push([width - 1, y]);
+  }
+
+  while (stack.length > 0) {
+    const [x, y] = stack.pop();
+    const i = idx(x, y);
+    if (visited[i]) continue;
+    visited[i] = 1;
+
+    if (colorDistToBg(i) > tolerance) continue;
+
+    data[i * 4 + 3] = 0;
+    removed[i] = 1;
+
+    if (x > 0) stack.push([x - 1, y]);
+    if (x < width - 1) stack.push([x + 1, y]);
+    if (y > 0) stack.push([x, y - 1]);
+    if (y < height - 1) stack.push([x, y + 1]);
+  }
+
+  featherEdges(data, removed, width, height);
+
+  ctx.putImageData(imageData, 0, 0);
+  return imageData;
+}
+
+/// 切り抜きの境界がギザギザに見えないよう、透明画素に隣接する不透明画素の
+/// アルファ値を少しだけ弱めてなじませる、簡易的な1パスのフェザリング。
+function featherEdges(data, removed, width, height) {
+  const idx = (x, y) => y * width + x;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = idx(x, y);
+      if (removed[i]) continue;
+
+      let transparentNeighbors = 0;
+      const neighbors = [
+        [x - 1, y],
+        [x + 1, y],
+        [x, y - 1],
+        [x, y + 1],
+      ];
+      for (const [nx, ny] of neighbors) {
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        if (removed[idx(nx, ny)]) transparentNeighbors++;
+      }
+
+      if (transparentNeighbors > 0) {
+        const p = i * 4;
+        const factor = 1 - transparentNeighbors * 0.18;
+        data[p + 3] = Math.round(data[p + 3] * Math.max(0.35, factor));
+      }
+    }
+  }
+}
+
+/// 背景切り抜き後、周囲の透明な余白を取り除いて被写体にぴったりのサイズに詰める。
+function trimTransparentMargins(sourceCanvas) {
+  const width = sourceCanvas.width;
+  const height = sourceCanvas.height;
+  const ctx = sourceCanvas.getContext("2d");
+  const data = ctx.getImageData(0, 0, width, height).data;
+
+  let minX = width,
+    minY = height,
+    maxX = -1,
+    maxY = -1;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const alpha = data[(y * width + x) * 4 + 3];
+      if (alpha > 12) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  // 被写体が見つからなかった場合(背景除去が効きすぎた等)は元画像をそのまま返す
+  if (maxX < minX || maxY < minY) {
+    return sourceCanvas;
+  }
+
+  // 少し余白(パディング)を残す
+  const pad = Math.round(Math.max(maxX - minX, maxY - minY) * 0.04);
+  minX = Math.max(0, minX - pad);
+  minY = Math.max(0, minY - pad);
+  maxX = Math.min(width - 1, maxX + pad);
+  maxY = Math.min(height - 1, maxY + pad);
+
+  const trimmedWidth = maxX - minX + 1;
+  const trimmedHeight = maxY - minY + 1;
+
+  const trimmedCanvas = document.createElement("canvas");
+  trimmedCanvas.width = trimmedWidth;
+  trimmedCanvas.height = trimmedHeight;
+  trimmedCanvas
+    .getContext("2d")
+    .drawImage(sourceCanvas, minX, minY, trimmedWidth, trimmedHeight, 0, 0, trimmedWidth, trimmedHeight);
+
+  return trimmedCanvas;
+}
+
+/// Firebase保存やカード表示用に、指定した最大辺の長さに収まるようリサイズしてPNGのdata URLを返す。
+/// (透過を保持する必要があるのでJPEGではなくPNGを使用。Realtime Databaseに直接入れるため
+///  サイズを抑える目的で最大辺500px程度に制限している)
+function resizeCanvasToDataUrl(sourceCanvas, maxDimension) {
+  const scale = Math.min(1, maxDimension / Math.max(sourceCanvas.width, sourceCanvas.height));
+  const targetWidth = Math.max(1, Math.round(sourceCanvas.width * scale));
+  const targetHeight = Math.max(1, Math.round(sourceCanvas.height * scale));
+
+  const resizedCanvas = document.createElement("canvas");
+  resizedCanvas.width = targetWidth;
+  resizedCanvas.height = targetHeight;
+  resizedCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight);
+
+  return resizedCanvas.toDataURL("image/png");
+}
+
+capturePhotoBtn.addEventListener("click", () => {
+  if (!photoVideoEl.videoWidth) {
+    setStatus("カメラの準備中です。少し待ってから撮影してください", "error");
+    return;
+  }
+
+  const width = photoVideoEl.videoWidth;
+  const height = photoVideoEl.videoHeight;
+  photoCaptureCanvasEl.width = width;
+  photoCaptureCanvasEl.height = height;
+
+  const ctx = photoCaptureCanvasEl.getContext("2d");
+  ctx.drawImage(photoVideoEl, 0, 0, width, height);
+
+  removeBackground(ctx, width, height);
+  const trimmedCanvas = trimTransparentMargins(photoCaptureCanvasEl);
+
+  cutoutPreviewCanvasEl.width = trimmedCanvas.width;
+  cutoutPreviewCanvasEl.height = trimmedCanvas.height;
+  cutoutPreviewCanvasEl.getContext("2d").drawImage(trimmedCanvas, 0, 0);
+
+  capturedCutoutDataUrl = resizeCanvasToDataUrl(trimmedCanvas, 500);
+
+  photoVideoEl.style.display = "none";
+  cutoutPreviewCanvasEl.style.display = "block";
+  capturePhotoBtn.style.display = "none";
+  retakePhotoBtn.style.display = "inline-block";
+  usePhotoBtn.style.display = "inline-block";
+
+  setStatus("背景を切り抜きました。よければ「この写真を使う」を押してください");
+});
+
+retakePhotoBtn.addEventListener("click", () => {
+  capturedCutoutDataUrl = null;
+
+  photoVideoEl.style.display = "block";
+  cutoutPreviewCanvasEl.style.display = "none";
+  capturePhotoBtn.style.display = "inline-block";
+  retakePhotoBtn.style.display = "none";
+  usePhotoBtn.style.display = "none";
+
+  setStatus("背景がなるべく無地になるようにキャラクターを置いて撮影してください");
+});
+
+usePhotoBtn.addEventListener("click", () => {
+  stopPhotoCamera();
+  showNameInput(scannedCardData);
+});
+
+skipPhotoBtn.addEventListener("click", () => {
+  capturedCutoutDataUrl = null;
+  stopPhotoCamera();
+  showNameInput(scannedCardData);
+});
+
 registerBtn.addEventListener("click", () => {
   const name = characterNameInput.value.trim();
   if (!name) {
@@ -397,13 +700,22 @@ registerBtn.addEventListener("click", () => {
 
   // 記録として保存しておく(将来Unity側で読み込んで使う場合などに利用できる)。
   // 保存に失敗しても、スマホ側の表示自体は続行してよい。
+  const recordData = {
+    cardId: scannedCardData.cardId,
+    seed: scannedCardData.seed,
+    timestamp: Date.now(),
+    ...stats,
+  };
+
+  // 撮影・背景切り抜きした写真があれば一緒に保存する(PNGのdata URL文字列として)。
+  // Realtime Databaseの肥大化を避けるため、resizeCanvasToDataUrlで最大辺500px程度に
+  // 縮小済みのものを使っている。
+  if (capturedCutoutDataUrl) {
+    recordData.photoDataUrl = capturedCutoutDataUrl;
+  }
+
   db.ref("characters")
-    .push({
-      cardId: scannedCardData.cardId,
-      seed: scannedCardData.seed,
-      timestamp: Date.now(),
-      ...stats,
-    })
+    .push(recordData)
     .catch((e) => {
       logDebug("エラー(Firebase保存、表示は続行します): " + e);
     });
