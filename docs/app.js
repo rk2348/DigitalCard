@@ -1,8 +1,10 @@
 // オリサモ カードスキャン用ページ
 // スマホのカメラでQRコード(カードID＋シード値のJSON)を読み取り、名前を入力すると、
 // その場でJavaScript側でキャラクターのステータスを確定させて表示する。
-// Unity(QRScanScene)は起動不要。結果はFirebase Realtime Databaseの /characters に
-// 記録として保存するので、将来Unity側で読み込んで使うこともできる。
+// このページ単体でカード登録は完結する(Unityの起動は不要)。
+// 結果はFirebase Realtime Databaseの /characters/{cardId} に、カードIDをキーとして保存する。
+// 対戦前にUnity(QRScanシーン)で同じ物理カードを再スキャンすると、このcardIdをもとに
+// Firebaseから確定済みのステータスを取得し、プレイヤーの所持キャラクターとして呼び出す。
 
 const firebaseConfig = {
   apiKey: "AIzaSyAQBqecVE538sEoEnB1oJk0-mVCaE2mKL0",
@@ -95,6 +97,8 @@ function generateCharacterStats(seed, characterName) {
     hp,
     maxHp,
     isMutation,
+    skillType,
+    ratio,
     skillName,
     skillDescription,
   };
@@ -315,13 +319,15 @@ registerBtn.addEventListener("click", () => {
 
   const stats = generateCharacterStats(scannedCardData.seed, name);
 
-  // 記録として保存しておく(将来Unity側で読み込んで使う場合などに利用できる)。
+  // cardIdをキーにして保存する(pushキーではない)。同じ物理カードを何度登録しても
+  // 同じ場所が上書きされるだけなので、Unity側(QRScanシーン)がこのカードを再スキャンした際に
+  // 「/characters/{cardId}」を直接GETするだけでピンポイントに呼び出せる。
   // 保存に失敗しても、スマホ側の表示自体は続行してよい。
-  db.ref("characters")
-    .push({
+  db.ref("characters/" + scannedCardData.cardId)
+    .set({
       cardId: scannedCardData.cardId,
       seed: scannedCardData.seed,
-      timestamp: Date.now(),
+      timestamp: firebase.database.ServerValue.TIMESTAMP,
       ...stats,
     })
     .catch((e) => {

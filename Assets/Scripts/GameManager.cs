@@ -1,9 +1,10 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
 /// シーンをまたいでキャラクターデータを保持するシングルトン。
-/// タイトル → キャラクター作成 → バトル、の一連の流れで
-/// プレイヤーキャラクターの情報を保持し続ける役割を持つ。
+/// タイトル → (キャラクター登録/QR読取) → チーム編成 → バトル、の一連の流れで
+/// プレイヤーが所持するキャラクターのコレクションと、バトルへ出撃させる編成(選択順)を保持する。
 ///
 /// 【セットアップ方法】
 /// 1. 空のGameObjectを作成し、名前を "GameManager" にする
@@ -14,8 +15,17 @@ public class GameManager : MonoBehaviour
 {
     public static GameManager Instance { get; private set; }
 
-    // プレイヤーが作成したキャラクター
-    public CharacterStats PlayerCharacter { get; private set; }
+    /// <summary>
+    /// プレイヤーが所持している全キャラクター（QRコードを読み取るたびにここへ追加される）。
+    /// </summary>
+    private readonly List<CharacterStats> ownedCharacters = new List<CharacterStats>();
+    public IReadOnlyList<CharacterStats> OwnedCharacters => ownedCharacters;
+
+    /// <summary>
+    /// バトルに出撃させる編成（チーム選択シーンで選んだ、最大3体の並び順）。
+    /// バトル開始時にこの並び順で1体ずつ出撃する。
+    /// </summary>
+    public List<CharacterStats> SelectedTeam { get; private set; } = new List<CharacterStats>();
 
     private void Awake()
     {
@@ -31,19 +41,38 @@ public class GameManager : MonoBehaviour
     }
 
     /// <summary>
-    /// キャラクター作成シーンから呼び出し、キャラクターを保存する。
+    /// QRコード等から読み取ったキャラクターをコレクションに追加する。
+    /// キャラクター登録シーンやFirebaseCardListenerから呼び出す想定。
     /// </summary>
-    public void SavePlayerCharacter(CharacterStats stats)
+    public void AddOwnedCharacter(CharacterStats stats)
     {
-        PlayerCharacter = stats;
-        Debug.Log("キャラクターを保存しました: " + stats);
+        if (stats == null) return;
+
+        ownedCharacters.Add(stats);
+        Debug.Log($"キャラクターをコレクションに追加しました（所持数:{ownedCharacters.Count}）: {stats}");
     }
 
     /// <summary>
-    /// バトルシーンなどから、保存済みキャラクターがあるか確認するために使う。
+    /// 所持キャラクターが1体以上いるかどうか。
     /// </summary>
-    public bool HasPlayerCharacter()
+    public bool HasOwnedCharacters()
     {
-        return PlayerCharacter != null;
+        return ownedCharacters.Count > 0;
+    }
+
+    /// <summary>
+    /// チーム選択シーンから呼び出し、バトルへ出撃させる編成（出撃順）を保存する。
+    /// </summary>
+    public void SetSelectedTeam(List<CharacterStats> team)
+    {
+        SelectedTeam = team != null ? new List<CharacterStats>(team) : new List<CharacterStats>();
+    }
+
+    /// <summary>
+    /// 編成が選択済みかどうか。
+    /// </summary>
+    public bool HasSelectedTeam()
+    {
+        return SelectedTeam != null && SelectedTeam.Count > 0;
     }
 }
