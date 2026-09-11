@@ -1,28 +1,27 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Text;
-using System.Text.RegularExpressions;
 using UnityEngine;
+using TMPro;
 using UnityEngine.Networking;
 
 /// <summary>
-/// Firebase Realtime DatabaseをUnityから定期的にポーリングし、スマホ(GitHub Pages)から
-/// 書き込まれたカード登録リクエスト(pendingRegistrations)を処理して、
-/// 結果(results)をFirebaseへ書き戻すコンポーネント。
-///
-/// これまでの QRWebServer.cs (HttpListenerによる簡易サーバー) と
-/// QRCharacterRegistrar.cs (受信データの処理) を置き換えるもの。
-/// LAN内サーバーやCloudflare Tunnel等のトンネルが一切不要になる。
+/// 物理カードのQRコードを再スキャンした瞬間、そのカード(cardId)に紐づく
+/// 確定済みキャラクターをFirebase Realtime Databaseから取得し、
+/// プレイヤーの所持キャラクター(GameManager)として呼び出すコンポーネント。
 ///
 /// 【全体の流れ】
-/// 1. スマホがQRを読み取り、名前を入力して /pendingRegistrations/{key} に書き込む
-///    （{key}はFirebaseのpush()が生成する一意なID）
-/// 2. このスクリプトが数秒おきに /pendingRegistrations をポーリングし、新しいエントリを検知する
-/// 3. seedからCharacterStats.AssignRandomStats(seed)でキャラクターを確定させる
-/// 4. 結果を /results/{key} に書き込む
-/// 5. 処理済みのエントリは /pendingRegistrations/{key} から削除する
-/// 6. スマホは /results/{key} をリアルタイム購読しており、書き込まれた瞬間にステータスを表示する
+/// 1. スマホ(docs/のWebページ、app.js)がQRを読み取り、名前を入力して
+///    ステータスをその場で確定させ、/characters/{cardId} に保存する
+///    （cardIdをキーにしているので、同じ物理カードは何度登録しても
+///    常に同じ場所が上書きされるだけになる）
+/// 2. プレイヤーが対戦前にUnity(QRScanシーン)で同じ物理カードのQRを
+///    QRCodeScannerでもう一度スキャンする
+/// 3. このスクリプトがQRCodeScanner.OnQRCodeScannedを受けて、
+///    デコードされたcardIdをもとに /characters/{cardId} をGETする
+/// 4. 取得できたステータスからCharacterStatsを再構築し、
+///    GameManagerの所持キャラクターコレクションに追加する
+///    （seedから再計算はしない。スマホ側で確定済みの値をそのまま使う）
 ///
 /// Firebase Unity SDKは導入せず、UnityWebRequestでREST API
 /// （https://＜databaseURL＞/パス.json）を直接叩くことで依存を減らしている。
@@ -31,32 +30,31 @@ using UnityEngine.Networking;
 /// 1. QRScanシーンに空のGameObjectを作成し、このスクリプトをアタッチ
 /// 2. Inspectorの databaseUrl に、FirebaseコンソールのdatabaseURL
 ///    （例: https://digitalcard-b825d-default-rtdb.firebaseio.com）を入力
-/// 3. 再生すると自動的にポーリングが始まる(Consoleに開始ログが出ます)
+/// 3. Inspectorの Qr Code Scanner に、同じシーンのQRCodeScanner(QRScanner)をドラッグ
+/// 4. Status Text（任意）に検索結果・エラーメッセージ表示用のTextMeshProUGUIをドラッグ
 ///
 /// 【重要：セキュリティルールについて】
 /// このスクリプトはFirebase認証を行わず、REST APIへ直接アクセスする。
 /// Realtime Databaseのルールが誰でも読み書き可能な設定(テストモード)である前提。
-/// イベント本番運用の前には、最低限 pendingRegistrations と results 配下だけ
-/// 読み書きを許可するようルールを絞ることを推奨する。
-///
-/// 【JSONパースについて】
-/// JsonUtilityは辞書型(キーが可変のJSONオブジェクト)を直接パースできないため、
-/// トップレベルのキー一覧の取得だけ簡易的に正規表現で行っている。個々のエントリの
-/// 中身(cardId, seedなど)は固定の形なのでJsonUtilityで安全にパースできる。
-/// より堅牢にしたい場合は com.unity.nuget.newtonsoft-json パッケージの導入を検討してください。
+/// イベント本番運用の前には、最低限 /characters 配下だけ読み書きを許可するよう
+/// ルールを絞ることを推奨する。
 /// </summary>
 public class FirebaseCardListener : MonoBehaviour
 {
     [Tooltip("FirebaseコンソールのdatabaseURL（例: https://digitalcard-b825d-default-rtdb.firebaseio.com）")]
     [SerializeField] private string databaseUrl = "";
 
-    [Tooltip("ポーリング間隔（秒）")]
-    [SerializeField] private float pollIntervalSeconds = 1.5f;
+    [Tooltip("QRコードのスキャンを担当するコンポーネント（同じシーン内のQRScanner）")]
+    [SerializeField] private QRCodeScanner qrCodeScanner;
 
-    [Tooltip("オンにすると、確定したキャラクターをGameManagerにプレイヤーキャラクターとして保存する")]
-    [SerializeField] private bool saveScannedCharacterToGameManager = false;
+    [Tooltip("検索結果・エラーメッセージを表示するUIテキスト（任意）")]
+    [SerializeField] private TextMeshProUGUI statusText;
 
-    private readonly HashSet<string> processingKeys = new HashSet<string>();
+    [Tooltip("オンにすると、見つかったキャラクターをGameManagerの所持キャラクターコレクションに追加する")]
+    [SerializeField] private bool saveScannedCharacterToGameManager = true;
+
+    /// <summary>このセッション内で既に取り込み済みのcardId（同じカードの二重登録防止）。</summary>
+    private readonly HashSet<string> registeredCardIds = new HashSet<string>();
 
     private void Start()
     {
@@ -67,48 +65,53 @@ public class FirebaseCardListener : MonoBehaviour
         }
 
         databaseUrl = databaseUrl.TrimEnd('/');
-        Debug.Log("FirebaseCardListener: ポーリングを開始します: " + databaseUrl);
-        StartCoroutine(PollLoop());
+
+        if (qrCodeScanner == null)
+        {
+            Debug.LogError("FirebaseCardListener: Qr Code Scannerが設定されていません。InspectorでQRScannerをドラッグしてください。");
+            return;
+        }
+
+        qrCodeScanner.OnQRCodeScanned += HandleQrScanned;
+        SetStatus("カードのQRコードをカメラにかざしてください");
     }
 
-    private IEnumerator PollLoop()
+    private void OnDestroy()
     {
-        while (true)
+        if (qrCodeScanner != null)
         {
-            yield return StartCoroutine(PollOnce());
-            yield return new WaitForSeconds(pollIntervalSeconds);
+            qrCodeScanner.OnQRCodeScanned -= HandleQrScanned;
         }
     }
 
-    private IEnumerator PollOnce()
+    /// <summary>
+    /// QRコードのデコードに成功するたびに呼ばれる。カード情報を解析し、
+    /// Firebase上の確定済みキャラクターを検索するコルーチンを開始する。
+    /// </summary>
+    private void HandleQrScanned(string decodedText)
     {
-        string shallowUrl = $"{databaseUrl}/pendingRegistrations.json?shallow=true";
-
-        using (UnityWebRequest req = UnityWebRequest.Get(shallowUrl))
+        QRCardData cardData = QRCardData.FromJson(decodedText);
+        if (cardData == null)
         {
-            yield return req.SendWebRequest();
-
-            if (req.result != UnityWebRequest.Result.Success)
-            {
-                Debug.LogWarning("FirebaseCardListener: pendingRegistrationsの取得に失敗しました: " + req.error);
-                yield break;
-            }
-
-            List<string> keys = ExtractTopLevelKeys(req.downloadHandler.text);
-
-            foreach (string key in keys)
-            {
-                if (processingKeys.Contains(key)) continue;
-                processingKeys.Add(key);
-                yield return StartCoroutine(ProcessEntry(key));
-                processingKeys.Remove(key);
-            }
+            SetStatus("カードの読み取りに失敗しました（データ形式が不正です）");
+            return;
         }
+
+        StartCoroutine(LookupCharacter(cardData));
     }
 
-    private IEnumerator ProcessEntry(string key)
+    /// <summary>
+    /// cardIdをもとに /characters/{cardId} を取得し、見つかればキャラクターとして登録する。
+    /// </summary>
+    private IEnumerator LookupCharacter(QRCardData cardData)
     {
-        string entryUrl = $"{databaseUrl}/pendingRegistrations/{key}.json";
+        if (registeredCardIds.Contains(cardData.cardId))
+        {
+            SetStatus("このカードは既に登録済みです");
+            yield break;
+        }
+
+        string entryUrl = $"{databaseUrl}/characters/{cardData.cardId}.json";
 
         using (UnityWebRequest getReq = UnityWebRequest.Get(entryUrl))
         {
@@ -116,147 +119,107 @@ public class FirebaseCardListener : MonoBehaviour
 
             if (getReq.result != UnityWebRequest.Result.Success)
             {
-                Debug.LogWarning($"FirebaseCardListener: {key} の取得に失敗しました: " + getReq.error);
+                Debug.LogWarning($"FirebaseCardListener: {cardData.cardId} の取得に失敗しました: " + getReq.error);
+                SetStatus("カード情報の取得に失敗しました。通信環境を確認してください");
                 yield break;
             }
 
             string json = getReq.downloadHandler.text;
             if (string.IsNullOrEmpty(json) || json == "null")
             {
-                yield break; // 既に他の処理で消費済み等
+                SetStatus("このカードはまだスマホで登録されていません");
+                yield break;
             }
 
-            PendingRegistration pending;
+            CharacterRecord record;
             try
             {
-                pending = JsonUtility.FromJson<PendingRegistration>(json);
+                record = JsonUtility.FromJson<CharacterRecord>(json);
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"FirebaseCardListener: {key} のパースに失敗しました: " + e.Message);
+                Debug.LogWarning($"FirebaseCardListener: {cardData.cardId} のパースに失敗しました: " + e.Message);
+                SetStatus("カード情報の解析に失敗しました");
                 yield break;
             }
 
-            if (pending == null || string.IsNullOrEmpty(pending.cardId) || string.IsNullOrEmpty(pending.characterName))
+            if (record == null || string.IsNullOrEmpty(record.characterName))
             {
-                Debug.LogWarning($"FirebaseCardListener: {key} のデータが不正です: " + json);
-                yield return StartCoroutine(PutResult(key, BuildErrorResponse("カードIDまたは名前が空です")));
-                yield return StartCoroutine(DeletePending(key));
+                Debug.LogWarning($"FirebaseCardListener: {cardData.cardId} のデータが不正です: " + json);
+                SetStatus("カード情報が不正です");
                 yield break;
             }
 
-            CharacterStats stats = new CharacterStats(pending.characterName);
-            stats.AssignRandomStats(pending.seed);
+            CharacterStats stats = BuildCharacterStats(record);
+            registeredCardIds.Add(cardData.cardId);
 
-            Debug.Log($"[FirebaseCardListener] キャラクター登録: cardId={pending.cardId}\n{stats}");
+            Debug.Log($"[FirebaseCardListener] キャラクターを呼び出しました: cardId={cardData.cardId}\n{stats}");
 
             if (saveScannedCharacterToGameManager && GameManager.Instance != null)
             {
-                GameManager.Instance.SavePlayerCharacter(stats);
+                GameManager.Instance.AddOwnedCharacter(stats);
             }
 
-            string resultJson = BuildStatsResponse(stats);
-            yield return StartCoroutine(PutResult(key, resultJson));
-            yield return StartCoroutine(DeletePending(key));
-        }
-    }
-
-    private IEnumerator PutResult(string key, string resultJson)
-    {
-        string resultUrl = $"{databaseUrl}/results/{key}.json";
-        byte[] bodyRaw = Encoding.UTF8.GetBytes(resultJson);
-
-        using (UnityWebRequest putReq = new UnityWebRequest(resultUrl, "PUT"))
-        {
-            putReq.uploadHandler = new UploadHandlerRaw(bodyRaw);
-            putReq.downloadHandler = new DownloadHandlerBuffer();
-            putReq.SetRequestHeader("Content-Type", "application/json");
-
-            yield return putReq.SendWebRequest();
-
-            if (putReq.result != UnityWebRequest.Result.Success)
-            {
-                Debug.LogWarning($"FirebaseCardListener: {key} の結果書き込みに失敗しました: " + putReq.error);
-            }
-        }
-    }
-
-    private IEnumerator DeletePending(string key)
-    {
-        string entryUrl = $"{databaseUrl}/pendingRegistrations/{key}.json";
-
-        using (UnityWebRequest delReq = UnityWebRequest.Delete(entryUrl))
-        {
-            yield return delReq.SendWebRequest();
-
-            if (delReq.result != UnityWebRequest.Result.Success)
-            {
-                Debug.LogWarning($"FirebaseCardListener: {key} の削除に失敗しました: " + delReq.error);
-            }
+            SetStatus($"{stats.characterName} が仲間になった！");
         }
     }
 
     /// <summary>
-    /// Firebaseの ?shallow=true レスポンス（例: {"-Nabc":true,"-Nxyz":true}）から
-    /// トップレベルのキー一覧を取り出す。
+    /// Firebaseから取得した確定済みの値をもとにCharacterStatsを構築する。
+    /// スマホ側(app.js)で既にステータス・属性・スキルが確定済みのため、
+    /// AssignRandomStatsは呼ばずそのまま復元するだけにする。
     /// </summary>
-    private List<string> ExtractTopLevelKeys(string shallowJson)
+    private CharacterStats BuildCharacterStats(CharacterRecord record)
     {
-        var keys = new List<string>();
-        if (string.IsNullOrEmpty(shallowJson) || shallowJson == "null")
+        CharacterStats stats = new CharacterStats(record.characterName)
         {
-            return keys;
-        }
-
-        MatchCollection matches = Regex.Matches(shallowJson, "\"(-[A-Za-z0-9_]+)\"\\s*:");
-        foreach (Match m in matches)
-        {
-            keys.Add(m.Groups[1].Value);
-        }
-        return keys;
-    }
-
-    private string BuildStatsResponse(CharacterStats stats)
-    {
-        var res = new CharacterStatsResponse
-        {
-            status = "ok",
-            characterName = stats.characterName,
-            element = stats.element.ToString(),
-            attack = stats.attack,
-            defense = stats.defense,
-            speed = stats.speed,
-            hp = stats.hp,
-            maxHp = stats.maxHp,
-            isMutation = stats.isMutation,
-            skillName = stats.skill != null ? stats.skill.skillName : "",
-            skillDescription = stats.skill != null ? stats.skill.GetDescription() : ""
+            attack = record.attack,
+            defense = record.defense,
+            speed = record.speed,
+            maxHp = record.maxHp > 0 ? record.maxHp : 100,
+            isMutation = record.isMutation
         };
+        stats.hp = stats.maxHp;
 
-        return JsonUtility.ToJson(res);
+        if (Enum.TryParse(record.element, out ElementType element))
+        {
+            stats.element = element;
+        }
+        else
+        {
+            Debug.LogWarning($"FirebaseCardListener: 未知の属性文字列です({record.element})。Fireを既定値として使用します。cardId={record.cardId}");
+            stats.element = ElementType.Fire;
+        }
+
+        if (Enum.TryParse(record.skillType, out SkillType skillType))
+        {
+            stats.skill = new CharacterSkill(skillType, record.ratio);
+        }
+        else
+        {
+            // 旧バージョンのapp.js(skillType/ratio未送信)が書き込んだ過去データへの後方互換。
+            Debug.LogWarning($"FirebaseCardListener: skillTypeが見つかりません(古い形式のデータの可能性)。既定スキルを割り当てます。cardId={record.cardId}");
+            stats.skill = new CharacterSkill(SkillType.PowerBoost, 0.3f);
+        }
+
+        return stats;
     }
 
-    private string BuildErrorResponse(string message)
+    private void SetStatus(string text)
     {
-        var res = new ErrorResponse { status = "error", message = message };
-        return JsonUtility.ToJson(res);
+        if (statusText != null)
+        {
+            statusText.text = text;
+        }
     }
 
-    /// <summary>スマホ側(app.js)がpendingRegistrationsへ書き込むデータの形式。</summary>
+    /// <summary>/characters/{cardId} に保存されているデータの形式。</summary>
     [Serializable]
-    private class PendingRegistration
+    private class CharacterRecord
     {
         public string cardId;
         public int seed;
-        public string characterName;
         public long timestamp;
-    }
-
-    /// <summary>スマホ側へ返す、確定したキャラクターステータスのJSON形式。</summary>
-    [Serializable]
-    private class CharacterStatsResponse
-    {
-        public string status;
         public string characterName;
         public string element;
         public int attack;
@@ -265,14 +228,7 @@ public class FirebaseCardListener : MonoBehaviour
         public int hp;
         public int maxHp;
         public bool isMutation;
-        public string skillName;
-        public string skillDescription;
-    }
-
-    [Serializable]
-    private class ErrorResponse
-    {
-        public string status;
-        public string message;
+        public string skillType;
+        public float ratio;
     }
 }

@@ -14,10 +14,12 @@ using UnityEngine;
 ///   ・cardId : カードを一意に識別するID(印刷管理用。ゲームロジックには未使用)
 ///   ・seed   : ステータス生成用のシード値
 ///
-/// 読み取り側(QRCharacterStatusDisplay)は、このseedを
-/// CharacterStats.AssignRandomStats(int seed) に渡すことで、初めて
-/// 属性・ステータス・スキルを確定させる。同じカード(同じseed)を何度読み取っても
-/// 同じ中身が再現される。名前だけは読み取った人がその場で自由に付けられる。
+/// 読み取り側(スマホの docs/app.js)は、このseedをもとにCharacterStats.AssignRandomStats
+/// と同等のロジック(JS版)で属性・ステータス・スキルを確定させ、Firebaseの
+/// /characters/{cardId} に保存する。Unity(FirebaseCardListener)は同じ物理カードを
+/// 再スキャンした際に、そのcardIdをキーにして確定済みの結果を取得するだけで、
+/// seedから再計算はしない。同じカード(同じseed)を何度読み取っても同じ中身が
+/// 再現される。名前だけは読み取った人がその場で自由に付けられる。
 /// </summary>
 [Serializable]
 public class QRCardData

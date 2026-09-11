@@ -185,53 +185,33 @@ public class CharacterStats
         return value;
     }
 
+    /// <summary>
+    /// バトル用にこのキャラクターの複製を作成する。
+    /// HPは最大HPまで全回復した状態になる（コレクション本体のHPは変化しない）。
+    /// </summary>
+    public CharacterStats Clone()
+    {
+        CharacterStats clone = new CharacterStats(characterName)
+        {
+            attack = attack,
+            defense = defense,
+            speed = speed,
+            maxHp = maxHp,
+            hp = maxHp,
+            element = element,
+            skill = skill != null ? new CharacterSkill(skill.skillType, skill.ratio) : null,
+            isMutation = isMutation,
+            dataVersion = dataVersion
+        };
+        return clone;
+    }
+
     public override string ToString()
     {
         string mutationTag = isMutation ? "[突然変異] " : "";
+        string skillText = skill != null ? $"スキル「{skill.skillName}」:{skill.GetDescription()}" : "スキル未設定";
         return $"{mutationTag}{characterName}\n" +
                $"属性:{element}  ATK:{attack} DEF:{defense} SPD:{speed} HP:{hp}\n" +
-               $"スキル「{skill.skillName}」:{skill.GetDescription()}";
-    }
-
-    /// <summary>
-    /// カード印刷用QRコードに埋め込むJSON文字列に変換する。
-    /// </summary>
-    public string ToJson()
-    {
-        return JsonUtility.ToJson(this);
-    }
-
-    /// <summary>
-    /// QRコードから読み取ったJSON文字列をCharacterStatsに変換する。
-    /// 形式が不正な場合はnullを返す(呼び出し側でnullチェックを行うこと)。
-    /// </summary>
-    public static CharacterStats FromJson(string json)
-    {
-        if (string.IsNullOrEmpty(json))
-        {
-            return null;
-        }
-
-        try
-        {
-            CharacterStats stats = JsonUtility.FromJson<CharacterStats>(json);
-
-            if (stats == null || string.IsNullOrEmpty(stats.characterName))
-            {
-                return null;
-            }
-
-            if (stats.dataVersion > CurrentDataVersion)
-            {
-                Debug.LogWarning($"未知のデータバージョンです(dataVersion:{stats.dataVersion})。読み取り結果が正しく表示されない可能性があります。");
-            }
-
-            return stats;
-        }
-        catch (Exception e)
-        {
-            Debug.LogError("QRコードのデータ解析に失敗しました: " + e.Message);
-            return null;
-        }
+               $"{skillText}";
     }
 }
