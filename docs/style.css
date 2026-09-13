@@ -585,7 +585,16 @@ h1 {
 }
 
 .reveal-card.reveal-pop .result-character-name {
-  animation: overlayPop 460ms ease-out 140ms forwards;
+  animation: nameOverlayPop 460ms ease-out 140ms forwards;
+}
+
+/* overlayPopと同じ動きだが、名前欄はbaseのtransformでtranslate(-50%,-50%)による
+   中央寄せを行っているため、アニメーション側のキーフレームにもtranslateを含めて
+   forwards適用後にtranslateが失われない(=右下にずれない)ようにする。 */
+@keyframes nameOverlayPop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.4); }
+  70% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 .overlay-value {
