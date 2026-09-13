@@ -33,7 +33,17 @@ function createSeededRandom(seed) {
   };
 }
 
-const ELEMENT_TYPES = ["Fire", "Wind", "Thunder", "Water", "Earth", "Light"];
+const ELEMENT_TYPES = ["Fire", "Wind", "Dark", "Water", "Earth", "Light"];
+
+// 属性ごとのカードパーツ(Assets/CardParts)フォルダ名
+const ELEMENT_TO_FOLDER = {
+  Fire: "hono",
+  Wind: "kaze",
+  Dark: "yami",
+  Water: "mizu",
+  Earth: "tuti",
+  Light: "hikari",
+};
 const SKILL_TYPES = ["PowerBoost", "GuardBoost", "LifeDrain", "Overdrive"];
 const SKILL_NAME_MAP = {
   PowerBoost: "疾風の一撃",
@@ -113,6 +123,7 @@ const characterNameInput = document.getElementById("character-name");
 const registerBtn = document.getElementById("register-btn");
 const rescanBtn = document.getElementById("rescan-btn");
 const statusDisplaySectionEl = document.getElementById("status-display-section");
+const cardVisualEl = document.getElementById("card-visual");
 const mutationBadgeEl = document.getElementById("mutation-badge");
 const resultCharacterNameEl = document.getElementById("result-character-name");
 const resultElementEl = document.getElementById("result-element");
@@ -133,7 +144,7 @@ let scannedCardData = null; // QRから読み取ったカード情報(cardId, se
 const ELEMENT_LABELS = {
   Fire: "炎",
   Wind: "風",
-  Thunder: "雷",
+  Dark: "闇",
   Water: "水",
   Earth: "土",
   Light: "光",
@@ -287,8 +298,65 @@ function resetToScanning() {
   setStatus("QRコードをカメラにかざしてください");
 }
 
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+/// Assets/CardParts のSVGパーツを重ねて、カード画像(#card-visual)を組み立てる。
+/// 各パーツの位置(%)は、826x1151のマスターキャンバス上での絶対座標(px)を
+/// 826/1151で割って算出したもの(SVGパーツはすべて同じマスターキャンバスから
+/// 切り出されているため、この比率がそのままレイアウトになる)。
+function buildCardVisual(stats) {
+  const folder = ELEMENT_TO_FOLDER[stats.element];
+  const base = "cardparts";
+
+  cardVisualEl.innerHTML = `
+    <img class="layer" src="${base}/${folder}/${folder}card.svg" alt="" />
+    <div class="layer-box" style="left:5.81%;top:17.72%;width:87.41%;height:46.92%">
+      <img src="${base}/cardimgspace.svg" alt="" />
+    </div>
+    <div class="layer-box" style="left:76.63%;top:1.13%;width:21.31%;height:14.77%">
+      <img src="${base}/armarkerspace.svg" alt="" />
+    </div>
+    <div class="layer-box" style="left:4.60%;top:2.09%;width:18.89%;height:13.64%">
+      <img src="${base}/${folder}/${folder}mark.svg" alt="" />
+    </div>
+    <div class="layer-box" style="left:12.35%;top:4.52%;width:61.62%;height:10.86%">
+      <img src="${base}/${folder}/${folder}name.svg" alt="" />
+    </div>
+    <div class="text-overlay name-overlay" style="left:12.78%;top:4.82%;width:60.78%;height:10.25%">${escapeHtml(
+      stats.characterName
+    )}</div>
+    <div class="layer-box" style="left:29.06%;top:66.03%;width:67.92%;height:25.89%">
+      <img src="${base}/${folder}/${folder}skill.svg" alt="" />
+    </div>
+    <div class="text-overlay skill-name-overlay" style="left:52.00%;top:67.64%;width:44.55%;height:5.56%">${escapeHtml(
+      stats.skillName
+    )}</div>
+    <div class="text-overlay skill-desc-overlay" style="left:29.48%;top:73.20%;width:67.07%;height:18.42%">${escapeHtml(
+      stats.skillDescription
+    )}</div>
+    <div class="layer-box" style="left:47.34%;top:89.14%;width:28.09%;height:6.26%">
+      <img src="${base}/atk.svg" alt="" />
+    </div>
+    <div class="text-overlay stat-overlay" style="left:57.16%;top:89.14%;width:16.85%;height:6.26%">${stats.attack}</div>
+    <div class="layer-box" style="left:24.82%;top:89.23%;width:28.09%;height:6.26%">
+      <img src="${base}/health.svg" alt="" />
+    </div>
+    <div class="text-overlay stat-overlay" style="left:34.65%;top:89.23%;width:16.85%;height:6.26%">${stats.hp}</div>
+    <div class="layer-box" style="left:70.82%;top:89.23%;width:26.15%;height:6.17%">
+      <img src="${base}/speed.svg" alt="" />
+    </div>
+    <div class="text-overlay stat-overlay" style="left:79.97%;top:89.23%;width:15.69%;height:6.17%">${stats.speed}</div>
+    ${stats.isMutation ? '<div class="mutation-star" style="left:2%;top:0%">★</div>' : ""}
+  `;
+}
+
 /// Unityから返ってきたキャラクターステータスを画面に表示する
 function showStatusDisplay(stats) {
+  buildCardVisual(stats);
   mutationBadgeEl.style.display = stats.isMutation ? "block" : "none";
   resultCharacterNameEl.textContent = stats.characterName;
   resultElementEl.textContent = "属性: " + (ELEMENT_LABELS[stats.element] || stats.element);

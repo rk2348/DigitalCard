@@ -10,7 +10,7 @@ public enum ElementType
 {
     Fire,    // 炎
     Wind,    // 風
-    Thunder, // 雷
+    Dark,    // 闇
     Water,   // 水
     Earth,   // 土
     Light    // 光
