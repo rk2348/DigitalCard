@@ -499,20 +499,18 @@ h1 {
 
 /* ---------- カード画像の上に焼き付ける文字類（座標は元画像の実寸から算出） ---------- */
 
-/* 撮影・背景切り抜きしたキャラクター写真を貼り込むポートレート窓。
-   ※座標(%)はカード画像の実寸に合わせて調整してください（他のoverlay要素と同じ考え方）。 */
+/* 撮影した写真を、カード画像の白枠(キャラクター画像スペース)いっぱいに敷き詰める。
+   ※座標(%)はカード画像の実寸(白枠の内側)から算出。 */
 .card-character-cutout {
   position: absolute;
-  top: 21%;
-  left: 50%;
-  width: 58%;
-  height: 28%;
-  transform: translateX(-50%) scale(0.85);
-  object-fit: contain;
-  object-position: center bottom;
+  top: 14.8%;
+  left: 6.9%;
+  width: 86%;
+  height: 55.9%;
+  object-fit: cover;
+  object-position: center;
   opacity: 0;
   z-index: 6;
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
 }
 
 .reveal-card.reveal-pop .card-character-cutout {
@@ -520,9 +518,9 @@ h1 {
 }
 
 @keyframes cutoutPop {
-  0% { opacity: 0; transform: translateX(-50%) scale(0.6); }
-  70% { opacity: 1; transform: translateX(-50%) scale(1.06); }
-  100% { opacity: 1; transform: translateX(-50%) scale(1); }
+  0% { opacity: 0; transform: scale(0.94); }
+  70% { opacity: 1; transform: scale(1.015); }
+  100% { opacity: 1; transform: scale(1); }
 }
 
 .mutation-badge {
