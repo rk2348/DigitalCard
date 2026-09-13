@@ -26,6 +26,57 @@ h1 {
   overflow: hidden;
 }
 
+.photo-capture-section {
+  background: #16213e;
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.photo-capture-hint {
+  font-size: 0.9rem;
+  color: #ccc;
+  margin: 0 0 12px;
+  text-align: center;
+}
+
+.photo-video,
+.photo-preview {
+  width: 100%;
+  border-radius: 8px;
+  background: #000;
+  display: block;
+}
+
+.photo-capture-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.photo-capture-buttons button {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: none;
+  font-weight: bold;
+  font-size: 1rem;
+}
+
+#take-photo-btn,
+#use-photo-btn {
+  background: #e94560;
+  color: white;
+}
+
+.photo-capture-buttons button.secondary {
+  background: transparent;
+  color: #999;
+  border: 1px solid #444;
+  font-weight: normal;
+}
+
 .name-input-section {
   background: #16213e;
   border-radius: 12px;
@@ -124,6 +175,10 @@ h1 {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.card-visual .photo-layer img {
+  object-fit: cover;
 }
 
 .card-visual .text-overlay {

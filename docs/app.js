@@ -117,6 +117,15 @@ function generateCharacterStats(seed, characterName) {
 const statusEl = document.getElementById("status");
 const debugLogEl = document.getElementById("debug-log");
 const readerEl = document.getElementById("reader");
+const photoCaptureSectionEl = document.getElementById("photo-capture-section");
+const photoCardIdEl = document.getElementById("photo-card-id");
+const photoVideoEl = document.getElementById("photo-video");
+const photoPreviewEl = document.getElementById("photo-preview");
+const photoCanvasEl = document.getElementById("photo-canvas");
+const takePhotoBtn = document.getElementById("take-photo-btn");
+const usePhotoBtn = document.getElementById("use-photo-btn");
+const retakePhotoBtn = document.getElementById("retake-photo-btn");
+const photoRescanBtn = document.getElementById("photo-rescan-btn");
 const nameInputSectionEl = document.getElementById("name-input-section");
 const scannedCardIdEl = document.getElementById("scanned-card-id");
 const characterNameInput = document.getElementById("character-name");
@@ -137,8 +146,10 @@ const nextScanBtn = document.getElementById("next-scan-btn");
 
 let scanner = null;
 let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
-let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち（この間はスキャン結果を無視する）
+let isAwaitingName = false; // QR読み取り済み・写真撮影/名前入力/結果待ち（この間はスキャン結果を無視する）
 let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
+let photoStream = null; // 写真撮影中のカメラストリーム
+let capturedPhotoDataUrl = null; // 撮影した写真(JPEGのdata URL)
 
 // Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
 const ELEMENT_LABELS = {
@@ -245,6 +256,15 @@ function startScanner() {
     });
 }
 
+/// もう一度スキャンする状態に戻る際、既存のscannerインスタンスを使ってQR読み取りを再開する。
+function resumeScanner() {
+  if (!scanner) return;
+  const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+  scanner.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure).catch((err) => {
+    logDebug("エラー(スキャナー再開): " + err);
+  });
+}
+
 function onScanFailure() {
   // 1フレームごとに呼ばれるが、単に読み取れていないだけなので何もしない
 }
@@ -269,7 +289,70 @@ function onScanSuccess(decodedText) {
   }
 
   scannedCardData = cardData;
-  showNameInput(cardData);
+  isAwaitingName = true; // スキャナー停止～写真撮影準備の間に連続で読み取られるのを防ぐ
+
+  // QR用のカメラを止めてから、写真撮影用のカメラに切り替える
+  if (scanner) {
+    scanner
+      .stop()
+      .catch((err) => logDebug("警告(スキャナー停止に失敗、続行します): " + err))
+      .then(() => showPhotoCapture(cardData));
+  } else {
+    showPhotoCapture(cardData);
+  }
+}
+
+/// QRコードとは別に、カードに写す写真を撮影してもらう画面を表示する
+function showPhotoCapture(cardData) {
+  isAwaitingName = true;
+  capturedPhotoDataUrl = null;
+
+  photoCardIdEl.textContent = cardData.cardId;
+  photoVideoEl.style.display = "block";
+  photoPreviewEl.style.display = "none";
+  takePhotoBtn.style.display = "block";
+  usePhotoBtn.style.display = "none";
+  retakePhotoBtn.style.display = "none";
+
+  readerEl.style.display = "none";
+  photoCaptureSectionEl.style.display = "block";
+  setStatus("カードに写す写真を撮影してください");
+
+  navigator.mediaDevices
+    .getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false })
+    .then((stream) => {
+      photoStream = stream;
+      photoVideoEl.srcObject = stream;
+    })
+    .catch((err) => {
+      setStatus("カメラを起動できませんでした: " + err, "error");
+      logDebug("エラー(写真用カメラ起動): " + err);
+    });
+}
+
+/// 撮影中のカメラを停止する
+function stopPhotoStream() {
+  if (photoStream) {
+    photoStream.getTracks().forEach((track) => track.stop());
+    photoStream = null;
+  }
+  photoVideoEl.srcObject = null;
+}
+
+/// video要素の現在のフレームをJPEGのdata URLとして取り出す(長辺640pxに縮小)
+function capturePhotoFrame() {
+  const maxSize = 640;
+  const videoWidth = photoVideoEl.videoWidth || 640;
+  const videoHeight = photoVideoEl.videoHeight || 480;
+  const scale = Math.min(1, maxSize / Math.max(videoWidth, videoHeight));
+  const width = Math.round(videoWidth * scale);
+  const height = Math.round(videoHeight * scale);
+
+  photoCanvasEl.width = width;
+  photoCanvasEl.height = height;
+  photoCanvasEl.getContext("2d").drawImage(photoVideoEl, 0, 0, width, height);
+
+  return photoCanvasEl.toDataURL("image/jpeg", 0.72);
 }
 
 /// カード読み取り後、キャラクター名を入力してもらう画面を表示する
@@ -279,7 +362,7 @@ function showNameInput(cardData) {
   scannedCardIdEl.textContent = cardData.cardId;
   characterNameInput.value = "";
 
-  readerEl.style.display = "none";
+  photoCaptureSectionEl.style.display = "none";
   nameInputSectionEl.style.display = "block";
   setStatus("キャラクターの名前を入力してください");
 
@@ -287,15 +370,19 @@ function showNameInput(cardData) {
   setTimeout(() => characterNameInput.focus(), 100);
 }
 
-/// 名前入力画面・ステータス表示画面を閉じて、スキャン待ち状態に戻す
+/// 写真撮影・名前入力・ステータス表示画面を閉じて、スキャン待ち状態に戻す
 function resetToScanning() {
   isAwaitingName = false;
   scannedCardData = null;
+  capturedPhotoDataUrl = null;
+  stopPhotoStream();
 
+  photoCaptureSectionEl.style.display = "none";
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "none";
   readerEl.style.display = "block";
   setStatus("QRコードをカメラにかざしてください");
+  resumeScanner();
 }
 
 function escapeHtml(text) {
@@ -308,15 +395,23 @@ function escapeHtml(text) {
 /// 各パーツの位置(%)は、826x1151のマスターキャンバス上での絶対座標(px)を
 /// 826/1151で割って算出したもの(SVGパーツはすべて同じマスターキャンバスから
 /// 切り出されているため、この比率がそのままレイアウトになる)。
-function buildCardVisual(stats) {
+function buildCardVisual(stats, photoDataUrl) {
   const folder = ELEMENT_TO_FOLDER[stats.element];
   const base = "cardparts";
+
+  // cardimgspace.svgの枠線の内側(白地部分)に収まるよう、少し内側に余白を取った位置
+  const photoLayer = photoDataUrl
+    ? `<div class="layer-box photo-layer" style="left:6.66%;top:18.33%;width:85.71%;height:45.70%">
+         <img src="${photoDataUrl}" alt="撮影した写真" />
+       </div>`
+    : "";
 
   cardVisualEl.innerHTML = `
     <img class="layer" src="${base}/${folder}/${folder}card.svg" alt="" />
     <div class="layer-box" style="left:5.81%;top:17.72%;width:87.41%;height:46.92%">
       <img src="${base}/cardimgspace.svg" alt="" />
     </div>
+    ${photoLayer}
     <div class="layer-box" style="left:76.63%;top:1.13%;width:21.31%;height:14.77%">
       <img src="${base}/armarkerspace.svg" alt="" />
     </div>
@@ -355,8 +450,8 @@ function buildCardVisual(stats) {
 }
 
 /// Unityから返ってきたキャラクターステータスを画面に表示する
-function showStatusDisplay(stats) {
-  buildCardVisual(stats);
+function showStatusDisplay(stats, photoDataUrl) {
+  buildCardVisual(stats, photoDataUrl);
   mutationBadgeEl.style.display = stats.isMutation ? "block" : "none";
   resultCharacterNameEl.textContent = stats.characterName;
   resultElementEl.textContent = "属性: " + (ELEMENT_LABELS[stats.element] || stats.element);
@@ -391,20 +486,53 @@ registerBtn.addEventListener("click", () => {
   // 同じ場所が上書きされるだけなので、Unity側(QRScanシーン)がこのカードを再スキャンした際に
   // 「/characters/{cardId}」を直接GETするだけでピンポイントに呼び出せる。
   // 保存に失敗しても、スマホ側の表示自体は続行してよい。
+  const payload = {
+    cardId: scannedCardData.cardId,
+    seed: scannedCardData.seed,
+    timestamp: firebase.database.ServerValue.TIMESTAMP,
+    ...stats,
+  };
+  if (capturedPhotoDataUrl) {
+    payload.photo = capturedPhotoDataUrl;
+  }
+
   db.ref("characters/" + scannedCardData.cardId)
-    .set({
-      cardId: scannedCardData.cardId,
-      seed: scannedCardData.seed,
-      timestamp: firebase.database.ServerValue.TIMESTAMP,
-      ...stats,
-    })
+    .set(payload)
     .catch((e) => {
       logDebug("エラー(Firebase保存、表示は続行します): " + e);
     });
 
-  showStatusDisplay(stats);
+  showStatusDisplay(stats, capturedPhotoDataUrl);
   isSending = false;
   registerBtn.disabled = false;
+});
+
+takePhotoBtn.addEventListener("click", () => {
+  capturedPhotoDataUrl = capturePhotoFrame();
+  photoPreviewEl.src = capturedPhotoDataUrl;
+  photoPreviewEl.style.display = "block";
+  photoVideoEl.style.display = "none";
+  takePhotoBtn.style.display = "none";
+  usePhotoBtn.style.display = "block";
+  retakePhotoBtn.style.display = "block";
+});
+
+retakePhotoBtn.addEventListener("click", () => {
+  capturedPhotoDataUrl = null;
+  photoPreviewEl.style.display = "none";
+  photoVideoEl.style.display = "block";
+  takePhotoBtn.style.display = "block";
+  usePhotoBtn.style.display = "none";
+  retakePhotoBtn.style.display = "none";
+});
+
+usePhotoBtn.addEventListener("click", () => {
+  stopPhotoStream();
+  showNameInput(scannedCardData);
+});
+
+photoRescanBtn.addEventListener("click", () => {
+  resetToScanning();
 });
 
 rescanBtn.addEventListener("click", () => {
