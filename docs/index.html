@@ -21,7 +21,22 @@
     <div class="brand-mark">⬡</div>
     <h1>オリサモ カードスキャン</h1>
 
-    <div id="reader"></div>
+    <div id="home-section" class="home-section">
+      <p class="home-lead">やりたいことを選んでください</p>
+      <div class="home-buttons">
+        <button id="create-character-btn" class="home-btn home-btn-create">
+          <span class="home-btn-icon">🎴</span>
+          <span class="home-btn-label">カードを登録</span>
+        </button>
+        <button id="start-battle-btn" class="home-btn home-btn-battle">
+          <span class="home-btn-icon">⚔️</span>
+          <span class="home-btn-label">対戦する</span>
+        </button>
+      </div>
+    </div>
+
+    <div id="reader" style="display: none;"></div>
+    <button id="back-to-home-btn" class="back-to-home-btn" style="display: none;">← ホームに戻る</button>
 
     <div id="name-input-section" class="name-input-section" style="display: none;">
       <p class="scanned-card-label">カードID <span id="scanned-card-id"></span></p>
@@ -31,6 +46,14 @@
         <button id="register-btn">登録する</button>
         <button id="rescan-btn" class="secondary">もう一度スキャンする</button>
       </div>
+    </div>
+
+    <div id="battle-wait-section" class="battle-wait-section" style="display: none;">
+      <p class="scanned-card-label">対戦に参加するキャラクター</p>
+      <img id="battle-wait-photo" class="battle-wait-photo" src="" alt="" style="display: none;" />
+      <h2 id="battle-wait-name" class="battle-wait-name"></h2>
+      <p id="battle-wait-status" class="battle-wait-status">対戦キューに参加しています…</p>
+      <button id="battle-home-btn" class="secondary">ホームに戻る</button>
     </div>
 
     <div id="photo-capture-section" class="photo-capture-section" style="display: none;">
@@ -90,7 +113,10 @@
         <div class="sparkle-layer" id="sparkle-layer"></div>
       </div>
 
-      <button id="next-scan-btn">つぎのカードをスキャン</button>
+      <div class="name-input-buttons reveal-actions">
+        <button id="next-scan-btn">つぎのカードをスキャン</button>
+        <button id="reveal-home-btn" class="secondary">ホームに戻る</button>
+      </div>
     </div>
 
     <div id="status" class="status">読み込み中...</div>

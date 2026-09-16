@@ -103,6 +103,10 @@ function generateCharacterStats(seed, characterName) {
 }
 
 const statusEl = document.getElementById("status");
+const homeSectionEl = document.getElementById("home-section");
+const createCharacterBtn = document.getElementById("create-character-btn");
+const startBattleBtn = document.getElementById("start-battle-btn");
+const backToHomeBtn = document.getElementById("back-to-home-btn");
 const readerEl = document.getElementById("reader");
 const nameInputSectionEl = document.getElementById("name-input-section");
 const scannedCardIdEl = document.getElementById("scanned-card-id");
@@ -136,6 +140,12 @@ const resultHpEl = document.getElementById("result-hp");
 const resultSkillNameEl = document.getElementById("result-skill-name");
 const resultSkillDescriptionEl = document.getElementById("result-skill-description");
 const nextScanBtn = document.getElementById("next-scan-btn");
+const revealHomeBtn = document.getElementById("reveal-home-btn");
+const battleWaitSectionEl = document.getElementById("battle-wait-section");
+const battleWaitPhotoEl = document.getElementById("battle-wait-photo");
+const battleWaitNameEl = document.getElementById("battle-wait-name");
+const battleWaitStatusEl = document.getElementById("battle-wait-status");
+const battleHomeBtn = document.getElementById("battle-home-btn");
 
 let scanner = null;
 let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
@@ -143,6 +153,14 @@ let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち�
 let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
 let photoStream = null; // 実物撮影用のカメラストリーム(MediaStream)
 let capturedCutoutDataUrl = null; // 背景切り抜き後のキャラクター写真(PNG, data URL)。未撮影ならnull
+
+// "create"(キャラクター作成) または "battle"(対戦開始) のどちらの目的でQRを読むか。
+// ホーム画面でボタンを押すまではnull。
+let appMode = null;
+
+// 対戦キュー参加後、相手が揃うのを監視しているリスナー(ホームに戻る際に解除するため保持)
+let battleQueueListenerRef = null;
+let battleQueueListenerHandler = null;
 
 // Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
 // 実際のカード(闇・火・光・水・地・風)に合わせてある。Thunder(雷)は実カードに存在しないため
@@ -222,8 +240,78 @@ function init() {
     return;
   }
 
-  setStatus("QRコードをカメラにかざしてください");
+  goHome();
+}
+
+/// キャラクター作成モードを開始する: ホームを隠してQRリーダーを表示する。
+function startCreateMode() {
+  appMode = "create";
+  homeSectionEl.style.display = "none";
+  showReader();
+  setStatus("キャラクターにするカードのQRコードをカメラにかざしてください");
   startScanner();
+}
+
+/// 対戦開始モードを開始する: ホームを隠してQRリーダーを表示する。
+/// (このモードでは、既にキャラクター作成済みのカードのQRを読み取ってbattleSlotsに参加する)
+function startBattleMode() {
+  appMode = "battle";
+  homeSectionEl.style.display = "none";
+  showReader();
+  setStatus("対戦するキャラクターのカードのQRコードをカメラにかざしてください");
+  startScanner();
+}
+
+function showReader() {
+  readerEl.style.display = "block";
+  backToHomeBtn.style.display = "inline-block";
+}
+
+function hideReader() {
+  readerEl.style.display = "none";
+  backToHomeBtn.style.display = "none";
+}
+
+/// 全セクションを閉じてホーム画面に戻す。実行中のスキャナー・対戦キュー監視も停止する。
+function goHome() {
+  appMode = null;
+  isSending = false;
+  isAwaitingName = false;
+  scannedCardData = null;
+  capturedCutoutDataUrl = null;
+
+  stopPhotoCamera();
+  stopScanner();
+  detachBattleQueueListener();
+
+  mutationVignetteEl.classList.remove("active");
+  hideReader();
+  photoCaptureSectionEl.style.display = "none";
+  nameInputSectionEl.style.display = "none";
+  statusDisplaySectionEl.style.display = "none";
+  battleWaitSectionEl.style.display = "none";
+  homeSectionEl.style.display = "block";
+  setStatus("やりたいことを選んでください");
+}
+
+/// QRスキャナーを停止し、カメラを解放する(対戦キュー待機画面やホームに戻る際に呼ぶ)。
+function stopScanner() {
+  if (!scanner) return;
+  const runningScanner = scanner;
+  scanner = null;
+  runningScanner
+    .stop()
+    .then(() => runningScanner.clear())
+    .catch((e) => logDebug("エラー(スキャナー停止): " + e));
+}
+
+/// 対戦相手待ちのリアルタイム監視リスナーを解除する(二重登録・メモリリーク防止)。
+function detachBattleQueueListener() {
+  if (battleQueueListenerRef && battleQueueListenerHandler) {
+    battleQueueListenerRef.off("value", battleQueueListenerHandler);
+  }
+  battleQueueListenerRef = null;
+  battleQueueListenerHandler = null;
 }
 
 function startScanner() {
@@ -280,9 +368,72 @@ function onScanSuccess(decodedText) {
     return;
   }
 
+  if (appMode === "battle") {
+    handleBattleQrScanned(cardData);
+    return;
+  }
+
   scannedCardData = cardData;
   capturedCutoutDataUrl = null;
   showPhotoCapture(cardData);
+}
+
+/// 対戦開始モードでQRを読み取った時の処理。
+/// 既にキャラクター作成済みのカード(characterByCard/{cardId})かどうかを確認し、
+/// 見つかればそのデータのままbattleSlotsに参加する(名前・写真は再入力させない)。
+function handleBattleQrScanned(cardData) {
+  if (isSending) return;
+  isSending = true;
+  setStatus("カード情報を確認しています...");
+
+  db.ref("characterByCard/" + cardData.cardId)
+    .once("value")
+    .then((snapshot) => {
+      isSending = false;
+      const record = snapshot.val();
+
+      if (!record || !record.characterName) {
+        setStatus(
+          "このカードはまだ作成されていません。先に「カードを登録」で登録してください",
+          "error"
+        );
+        return; // スキャナーは動作を続けるので、そのまま別のカードを読み取れる
+      }
+
+      stopScanner();
+      showBattleWait(record);
+      joinBattleQueue({ ...record, timestamp: Date.now() });
+    })
+    .catch((e) => {
+      isSending = false;
+      logDebug("エラー(characterByCard取得): " + e);
+      setStatus("通信に失敗しました。もう一度お試しください", "error");
+    });
+}
+
+/// 対戦キュー参加後の待機画面を表示する。
+function showBattleWait(record) {
+  hideReader();
+  photoCaptureSectionEl.style.display = "none";
+  nameInputSectionEl.style.display = "none";
+  statusDisplaySectionEl.style.display = "none";
+  battleWaitSectionEl.style.display = "block";
+
+  battleWaitNameEl.textContent = record.characterName;
+  if (record.photoDataUrl) {
+    battleWaitPhotoEl.src = record.photoDataUrl;
+    battleWaitPhotoEl.style.display = "block";
+  } else {
+    battleWaitPhotoEl.src = "";
+    battleWaitPhotoEl.style.display = "none";
+  }
+  battleWaitStatusEl.textContent = "対戦キューに参加しています...";
+}
+
+/// 対戦キューの状況メッセージを、下部のステータスバーと待機画面の両方に反映する。
+function setBattleStatus(text, type = "info") {
+  setStatus(text, type);
+  if (battleWaitStatusEl) battleWaitStatusEl.textContent = text;
 }
 
 /// カード読み取り直後、実物を撮影して背景を切り抜く画面を表示する
@@ -298,7 +449,7 @@ function showPhotoCapture(cardData) {
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
 
-  readerEl.style.display = "none";
+  hideReader();
   nameInputSectionEl.style.display = "none";
   photoCaptureSectionEl.style.display = "block";
   setStatus("背景がなるべく無地になるようにキャラクターを置いて撮影してください");
@@ -363,8 +514,8 @@ function resetToScanning() {
   photoCaptureSectionEl.style.display = "none";
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "none";
-  readerEl.style.display = "block";
-  setStatus("QRコードをカメラにかざしてください");
+  showReader();
+  setStatus("キャラクターにするカードのQRコードをカメラにかざしてください");
 }
 
 /// Unityから返ってきたキャラクターステータスを、カード開封のステージ演出とともに表示する
@@ -716,7 +867,7 @@ function joinBattleQueue(recordData) {
           if (committed2) {
             onJoinedBattleQueue("player2");
           } else {
-            setStatus("現在、対戦の順番待ちが満席です。少し待ってからもう一度お試しください", "error");
+            setBattleStatus("現在、対戦の順番待ちが満席です。少し待ってからもう一度お試しください", "error");
           }
         }
       );
@@ -729,24 +880,26 @@ function joinBattleQueue(recordData) {
 /// 「対戦が始まりました」と表示してリスナーを解除する。
 function onJoinedBattleQueue(mySlot) {
   const slotLabel = mySlot === "player1" ? "プレイヤー1" : "プレイヤー2";
-  setStatus(`対戦キューに参加しました(${slotLabel})。相手を待っています…`, "success");
+  setBattleStatus(`対戦キューに参加しました(${slotLabel})。相手を待っています…`, "success");
 
   const slotsRef = db.ref("battleSlots");
   const handler = slotsRef.on("value", (snapshot) => {
     const slots = snapshot.val();
 
     if (slots && slots.player1 && slots.player2) {
-      setStatus("対戦相手が見つかりました！PC画面をご覧ください", "success");
+      setBattleStatus("対戦相手が見つかりました！PC画面をご覧ください", "success");
       return;
     }
 
     // 自分が登録したはずのスロットが消えている ＝ PC側で試合が成立し、
     // 次の組のためにリセットされた合図
     if (!slots || !slots[mySlot]) {
-      setStatus("対戦が始まりました。PC画面をご覧ください！", "success");
-      slotsRef.off("value", handler);
+      setBattleStatus("対戦が始まりました。PC画面をご覧ください！", "success");
+      detachBattleQueueListener();
     }
   });
+  battleQueueListenerRef = slotsRef;
+  battleQueueListenerHandler = handler;
 }
 
 registerBtn.addEventListener("click", () => {
@@ -795,10 +948,8 @@ registerBtn.addEventListener("click", () => {
       logDebug("エラー(characterByCard保存、表示は続行します): " + e);
     });
 
-  // 対戦キューへの参加。PC(Unity)側は一切QRコードを読み取らず、
-  // battleSlots/player1・player2の両方が埋まるのをポーリングで待つだけの設計にしたため、
-  // 「スマホでの登録」がそのまま「対戦への参加」を兼ねる。
-  joinBattleQueue(recordData);
+  // キャラクター作成はここで完了。対戦キューへの参加は「Battleを始める」モードで
+  // 改めてこのカードのQRを読み取った時に行う(characterByCardの内容をそのまま使う)。
 
   showStatusDisplay(stats);
   isSending = false;
@@ -811,6 +962,26 @@ rescanBtn.addEventListener("click", () => {
 
 nextScanBtn.addEventListener("click", () => {
   resetToScanning();
+});
+
+createCharacterBtn.addEventListener("click", () => {
+  startCreateMode();
+});
+
+startBattleBtn.addEventListener("click", () => {
+  startBattleMode();
+});
+
+backToHomeBtn.addEventListener("click", () => {
+  goHome();
+});
+
+battleHomeBtn.addEventListener("click", () => {
+  goHome();
+});
+
+revealHomeBtn.addEventListener("click", () => {
+  goHome();
 });
 
 init();
