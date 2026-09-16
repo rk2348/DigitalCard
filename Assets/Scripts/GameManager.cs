@@ -27,6 +27,11 @@ public class GameManager : MonoBehaviour
     /// </summary>
     public List<CharacterStats> SelectedTeam { get; private set; } = new List<CharacterStats>();
 
+    /// <summary>
+    /// 対戦キューを使わない単体テスト用のフォールバックで使用するプレイヤーキャラクター。
+    /// </summary>
+    public CharacterStats PlayerCharacter { get; private set; }
+
     private void Awake()
     {
         // シングルトン化：既に存在する場合は自分を破棄する
@@ -74,5 +79,21 @@ public class GameManager : MonoBehaviour
     public bool HasSelectedTeam()
     {
         return SelectedTeam != null && SelectedTeam.Count > 0;
+    }
+
+    /// <summary>
+    /// フォールバック用のプレイヤーキャラクターが保存済みかどうか。
+    /// </summary>
+    public bool HasPlayerCharacter()
+    {
+        return PlayerCharacter != null;
+    }
+
+    /// <summary>
+    /// フォールバック用のプレイヤーキャラクターを保存する。
+    /// </summary>
+    public void SavePlayerCharacter(CharacterStats stats)
+    {
+        PlayerCharacter = stats;
     }
 }
