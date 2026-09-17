@@ -261,6 +261,53 @@ h1 {
   cursor: pointer;
 }
 
+/* ---------- 対戦中の強/普/弱 選択(スマホ側で完結させる対戦操作) ---------- */
+
+.battle-turn-buttons {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.battle-turn-buttons button {
+  flex: 1;
+  padding: 20px 0;
+  border-radius: 10px;
+  border: none;
+  color: #1a1109;
+  font-weight: 700;
+  font-family: var(--font-body);
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.battle-turn-weak {
+  background: linear-gradient(135deg, #cfc6b4, #9c9182);
+}
+
+.battle-turn-normal {
+  background: linear-gradient(135deg, var(--brass), #a5652b);
+}
+
+.battle-turn-strong {
+  background: linear-gradient(135deg, #ff8a5b, #d43f3f);
+}
+
+.battle-turn-result {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  margin: 10px 0 18px;
+}
+
+.battle-turn-result.win {
+  color: var(--success);
+}
+
+.battle-turn-result.lose {
+  color: var(--danger);
+}
+
 /* ---------- 名前入力 ---------- */
 
 .name-input-section {

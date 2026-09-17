@@ -121,6 +121,11 @@ public class BattleManager : MonoBehaviour
              "未設定の場合は従来通りGameManagerに保存済みのキャラクター(無ければ自動生成)対ランダム敵で動作する。")]
     [SerializeField] private BattleQueueIntake battleQueueIntake;
 
+    [Tooltip("設定すると、各ターンの「強/普/弱」選択をPCのボタンではなくスマホ側からFirebase経由で" +
+             "受け取るようになる(本番の2台対戦モード用)。battleQueueIntakeとセットで使う。" +
+             "未設定の場合は従来通りPC画面のボタン(プレイヤー)+AI(敵)で動作する。")]
+    [SerializeField] private BattleTurnSync battleTurnSync;
+
     private CharacterStats player;
     private CharacterStats enemy;
 
@@ -292,6 +297,12 @@ public class BattleManager : MonoBehaviour
             yield return StartCoroutine(ExecuteAttack(second, first));
         }
 
+        if (battleTurnSync != null)
+        {
+            string winnerSlot = player.hp > 0 ? "player1" : "player2";
+            yield return StartCoroutine(battleTurnSync.WriteFinished(winnerSlot));
+        }
+
         ShowResult();
     }
 
@@ -307,31 +318,47 @@ public class BattleManager : MonoBehaviour
         MonsterVisual2D attackerVisual = attackerIsPlayer ? playerVisual : enemyVisual;
         MonsterVisual2D defenderVisual = attackerIsPlayer ? enemyVisual : playerVisual;
 
-        // ① 攻撃側の選択(内容はまだ公開しない)
-        AttackLevel attackLevel;
-        if (attackerIsPlayer)
-        {
-            yield return StartCoroutine(WaitForPlayerChoice($"{attacker.characterName}の番！攻撃の強さを選んでください"));
-            attackLevel = playerSelectedLevel;
-        }
-        else
-        {
-            yield return new WaitForSeconds(aiThinkDelay);
-            attackLevel = ChooseAiLevel(attacker, aiSpecialBias);
-        }
-        yield return StartCoroutine(ShowMessage($"{attacker.characterName}が攻撃を仕掛けてきた！"));
+        AttackLevel attackLevel = AttackLevel.Normal;
+        AttackLevel defenseLevel = AttackLevel.Normal;
 
-        // ② 防御側の選択(攻撃側が何を選んだかは分からないまま選ぶ)
-        AttackLevel defenseLevel;
-        if (defenderIsPlayer)
+        if (battleTurnSync != null)
         {
-            yield return StartCoroutine(WaitForPlayerChoice($"{defender.characterName}の番！防御の強さを選んでください"));
-            defenseLevel = playerSelectedLevel;
+            // 本番の2台対戦モード: 攻撃側・防御側ともスマホ側で同時に選択する(PCは表示のみ)
+            string attackerSlot = attackerIsPlayer ? "player1" : "player2";
+            string defenderSlot = defenderIsPlayer ? "player1" : "player2";
+
+            yield return StartCoroutine(battleTurnSync.WaitForChoices(attackerSlot, defenderSlot,
+                (a, d) => { attackLevel = a; defenseLevel = d; }));
+
+            yield return StartCoroutine(ShowMessage($"{attacker.characterName}が攻撃を仕掛けてきた！"));
         }
         else
         {
-            yield return new WaitForSeconds(aiThinkDelay);
-            defenseLevel = ChooseAiLevel(defender, 0f); // 防御は必殺技バイアスなしの均等ランダム
+            // フォールバック(スマホ対戦キューを使わない単体テスト用): PCボタン(プレイヤー)+AI(敵)
+            // ① 攻撃側の選択(内容はまだ公開しない)
+            if (attackerIsPlayer)
+            {
+                yield return StartCoroutine(WaitForPlayerChoice($"{attacker.characterName}の番！攻撃の強さを選んでください"));
+                attackLevel = playerSelectedLevel;
+            }
+            else
+            {
+                yield return new WaitForSeconds(aiThinkDelay);
+                attackLevel = ChooseAiLevel(attacker, aiSpecialBias);
+            }
+            yield return StartCoroutine(ShowMessage($"{attacker.characterName}が攻撃を仕掛けてきた！"));
+
+            // ② 防御側の選択(攻撃側が何を選んだかは分からないまま選ぶ)
+            if (defenderIsPlayer)
+            {
+                yield return StartCoroutine(WaitForPlayerChoice($"{defender.characterName}の番！防御の強さを選んでください"));
+                defenseLevel = playerSelectedLevel;
+            }
+            else
+            {
+                yield return new WaitForSeconds(aiThinkDelay);
+                defenseLevel = ChooseAiLevel(defender, 0f); // 防御は必殺技バイアスなしの均等ランダム
+            }
         }
 
         // ③ 両者の選択を同時に公開
@@ -418,6 +445,7 @@ public class BattleManager : MonoBehaviour
     {
         playerHasSelected = false;
         if (promptText != null) promptText.text = prompt;
+        else SetLog(prompt); // promptText未設定時はbattleLogTextに案内文を出す
         if (buttonPanel != null) buttonPanel.SetActive(true);
 
         yield return new WaitUntil(() => playerHasSelected);

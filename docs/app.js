@@ -147,6 +147,16 @@ const battleWaitNameEl = document.getElementById("battle-wait-name");
 const battleWaitStatusEl = document.getElementById("battle-wait-status");
 const battleHomeBtn = document.getElementById("battle-home-btn");
 
+// 対戦中(スマホ側で強/普/弱を選ぶ画面。PC/Unity側は結果を表示するだけ)
+const battleTurnSectionEl = document.getElementById("battle-turn-section");
+const battleTurnPromptEl = document.getElementById("battle-turn-prompt");
+const battleTurnButtonsEl = document.getElementById("battle-turn-buttons");
+const battleTurnStrongBtn = document.getElementById("battle-turn-strong-btn");
+const battleTurnNormalBtn = document.getElementById("battle-turn-normal-btn");
+const battleTurnWeakBtn = document.getElementById("battle-turn-weak-btn");
+const battleTurnResultEl = document.getElementById("battle-turn-result");
+const battleTurnHomeBtn = document.getElementById("battle-turn-home-btn");
+
 let scanner = null;
 let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
 let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち（この間はスキャン結果を無視する）
@@ -161,6 +171,15 @@ let appMode = null;
 // 対戦キュー参加後、相手が揃うのを監視しているリスナー(ホームに戻る際に解除するため保持)
 let battleQueueListenerRef = null;
 let battleQueueListenerHandler = null;
+
+// 対戦本編(activeBattle)の進行を監視しているリスナーまわりの状態。
+// 対戦の意思決定はすべてスマホ側で行い、PC(Unity)は結果を演出して表示するだけにする設計。
+let battleTurnListenerRef = null;
+let battleTurnListenerHandler = null;
+let myBattleSlot = null; // "player1" または "player2"(このスマホが対戦キューに参加した時のスロット)
+let currentBattleTurnNumber = null; // 現在activeBattleに出ているターン番号
+let currentBattleTurnRole = null; // このターン、自分が"attacker"(攻撃側)か"defender"(防御側)か
+let submittedBattleTurnNumber = -1; // 既に選択を送信済みのターン番号(二重送信・ボタン再表示防止用)
 
 // Unity側から返ってくる属性名(英語)を日本語表示に変換するためのマップ
 // 実際のカード(闇・火・光・水・地・風)に合わせてある。Thunder(雷)は実カードに存在しないため
@@ -283,6 +302,8 @@ function goHome() {
   stopPhotoCamera();
   stopScanner();
   detachBattleQueueListener();
+  detachBattleTurnListener();
+  myBattleSlot = null;
 
   mutationVignetteEl.classList.remove("active");
   hideReader();
@@ -290,6 +311,7 @@ function goHome() {
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "none";
   battleWaitSectionEl.style.display = "none";
+  battleTurnSectionEl.style.display = "none";
   homeSectionEl.style.display = "block";
   setStatus("やりたいことを選んでください");
 }
@@ -887,19 +909,120 @@ function onJoinedBattleQueue(mySlot) {
     const slots = snapshot.val();
 
     if (slots && slots.player1 && slots.player2) {
-      setBattleStatus("対戦相手が見つかりました！PC画面をご覧ください", "success");
+      setBattleStatus("対戦相手が見つかりました！これから対戦です", "success");
       return;
     }
 
     // 自分が登録したはずのスロットが消えている ＝ PC側で試合が成立し、
-    // 次の組のためにリセットされた合図
+    // 次の組のためにリセットされた合図。ここからは対戦本編(activeBattle)を見て、
+    // 自分の番が来たらこのスマホ上で強/普/弱を選ぶ画面に切り替える。
     if (!slots || !slots[mySlot]) {
-      setBattleStatus("対戦が始まりました。PC画面をご覧ください！", "success");
       detachBattleQueueListener();
+      startBattleTurnListener(mySlot);
     }
   });
   battleQueueListenerRef = slotsRef;
   battleQueueListenerHandler = handler;
+}
+
+/// 対戦本編開始。PC(Unity)側が書き込む/activeBattleを監視し、
+/// 自分の番が来たら強/普/弱ボタンを表示する。選択内容はattackerChoice/defenderChoiceに書き込むだけで、
+/// ダメージ計算・演出・勝敗判定はすべてPC(Unity)側が行う(このスマホは選択と結果表示のみ)。
+function startBattleTurnListener(mySlot) {
+  myBattleSlot = mySlot;
+  currentBattleTurnNumber = null;
+  currentBattleTurnRole = null;
+  submittedBattleTurnNumber = -1;
+
+  battleWaitSectionEl.style.display = "none";
+  battleTurnSectionEl.style.display = "block";
+  battleTurnResultEl.style.display = "none";
+  battleTurnHomeBtn.style.display = "none";
+  hideBattleTurnButtons();
+  setBattleTurnPrompt("対戦の準備をしています…");
+
+  const ref = db.ref("activeBattle");
+  const handler = ref.on("value", (snapshot) => {
+    const data = snapshot.val();
+
+    if (!data) {
+      setBattleTurnPrompt("対戦の準備をしています…");
+      hideBattleTurnButtons();
+      return;
+    }
+
+    if (data.status === "finished") {
+      detachBattleTurnListener();
+      const won = data.winnerSlot === myBattleSlot;
+      hideBattleTurnButtons();
+      battleTurnResultEl.textContent = won ? "勝利！おめでとうございます🎉" : "敗北…また挑戦してください";
+      battleTurnResultEl.className = "battle-turn-result " + (won ? "win" : "lose");
+      battleTurnResultEl.style.display = "block";
+      battleTurnHomeBtn.style.display = "block";
+      return;
+    }
+
+    if (data.status !== "choosing") return;
+
+    currentBattleTurnNumber = data.turn;
+
+    const isAttacker = data.attackerSlot === myBattleSlot;
+    const isDefender = data.defenderSlot === myBattleSlot;
+
+    if (!isAttacker && !isDefender) {
+      currentBattleTurnRole = null;
+      setBattleTurnPrompt("相手のターンです。PC画面をご覧ください");
+      hideBattleTurnButtons();
+      return;
+    }
+
+    if (submittedBattleTurnNumber === data.turn) {
+      setBattleTurnPrompt("相手の選択を待っています…");
+      hideBattleTurnButtons();
+      return;
+    }
+
+    currentBattleTurnRole = isAttacker ? "attacker" : "defender";
+    setBattleTurnPrompt(isAttacker ? "攻撃の強さを選んでください！" : "防御の強さを選んでください！");
+    showBattleTurnButtons();
+  });
+
+  battleTurnListenerRef = ref;
+  battleTurnListenerHandler = handler;
+}
+
+function detachBattleTurnListener() {
+  if (battleTurnListenerRef && battleTurnListenerHandler) {
+    battleTurnListenerRef.off("value", battleTurnListenerHandler);
+  }
+  battleTurnListenerRef = null;
+  battleTurnListenerHandler = null;
+}
+
+function setBattleTurnPrompt(text) {
+  battleTurnPromptEl.textContent = text;
+}
+
+function showBattleTurnButtons() {
+  battleTurnButtonsEl.style.display = "flex";
+}
+
+function hideBattleTurnButtons() {
+  battleTurnButtonsEl.style.display = "none";
+}
+
+/// 強/普/弱ボタンが押された時の処理。選択内容をactiveBattleの該当キーに書き込むだけ。
+function submitBattleTurnChoice(level) {
+  if (currentBattleTurnRole == null || currentBattleTurnNumber == null) return;
+
+  const key = currentBattleTurnRole === "attacker" ? "attackerChoice" : "defenderChoice";
+  submittedBattleTurnNumber = currentBattleTurnNumber;
+  hideBattleTurnButtons();
+  setBattleTurnPrompt("相手の選択を待っています…");
+
+  db.ref(`activeBattle/${key}`).set(level).catch((e) => {
+    logDebug("エラー(activeBattle選択の書き込み): " + e);
+  });
 }
 
 registerBtn.addEventListener("click", () => {
@@ -977,6 +1100,22 @@ backToHomeBtn.addEventListener("click", () => {
 });
 
 battleHomeBtn.addEventListener("click", () => {
+  goHome();
+});
+
+battleTurnStrongBtn.addEventListener("click", () => {
+  submitBattleTurnChoice("Strong");
+});
+
+battleTurnNormalBtn.addEventListener("click", () => {
+  submitBattleTurnChoice("Normal");
+});
+
+battleTurnWeakBtn.addEventListener("click", () => {
+  submitBattleTurnChoice("Weak");
+});
+
+battleTurnHomeBtn.addEventListener("click", () => {
   goHome();
 });
 
