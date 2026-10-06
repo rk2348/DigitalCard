@@ -8,8 +8,8 @@ using UnityEngine.Rendering.Universal;
 /// 対戦会場の3Dスタジアム。素材ファイルを使わず、すべて実行時にコードで組み立てる。
 ///
 /// 構成(単位はメートル、原点がフィールド中央):
-///   フィールド(44m×26m、芝のストライプ・白線・センターの魔法陣)
-///   → 外周のトラック → LEDボード付きの壁 → すり鉢状の観客席(16段・観客は約7000人)
+///   石畳の円形闘技場(半径16.5m、金の象嵌の六芒星・苔・四隅のクリスタルの石柱・センターの魔法陣)
+///   → 外側の石畳 → LEDボード付きの壁 → すり鉢状の観客席(16段・観客は約7000人)
 ///   → 屋根と照明塔(光の筋つき) → 大型ビジョン3面 → 夕暮れの空と星。
 /// 夜のナイター照明の雰囲気になるよう、Bloom・トーンマップ・ビネットのポストエフェクトもここで設定する。
 ///
@@ -33,8 +33,8 @@ public sealed class Stadium : MonoBehaviour
     private const int ArcSteps = 14;
     private const int StraightSteps = 12;
 
-    public Vector3 Player1Spot => new Vector3(-FighterX, 0f, 0f);
-    public Vector3 Player2Spot => new Vector3(FighterX, 0f, 0f);
+    public Vector3 Player1Spot => new Vector3(-FighterX, ArenaHeight, 0f);
+    public Vector3 Player2Spot => new Vector3(FighterX, ArenaHeight, 0f);
 
     private readonly List<Transform> crowdGroups = new List<Transform>();
     private readonly List<float> crowdPhases = new List<float>();
@@ -262,74 +262,145 @@ public sealed class Stadium : MonoBehaviour
         GameObject ground = StadiumKit.CreateFlatDecal("Ground", transform, 600f, StadiumKit.Lit(new Color(0.06f, 0.055f, 0.075f), 0.1f));
         ground.transform.localPosition = new Vector3(0f, -0.02f, 0f);
 
-        // トラック(フィールドと壁の間)
-        StadiumKit.MeshBuilder apron = new StadiumKit.MeshBuilder();
+        // 闘技場の外側の石畳(闘技場と壁の間)。大きめの敷石を少しずつ色を変えて並べる
         float ax = StandStraightX + StandInnerRadius, az = StandStraightZ + StandInnerRadius;
-        apron.AddQuad(new Vector3(-ax, 0f, -az), new Vector3(-ax, 0f, az), new Vector3(ax, 0f, az), new Vector3(ax, 0f, -az), Vector3.up, Color.white);
-        StadiumKit.CreateMeshObject("Track", transform, apron.Build(), StadiumKit.Lit(new Color(0.30f, 0.16f, 0.17f), 0.15f));
+        StadiumKit.MeshBuilder grout = new StadiumKit.MeshBuilder();
+        grout.AddQuad(new Vector3(-ax, 0f, -az), new Vector3(-ax, 0f, az), new Vector3(ax, 0f, az), new Vector3(ax, 0f, -az), Vector3.up, Color.white);
+        StadiumKit.CreateMeshObject("PavingGrout", transform, grout.Build(), StadiumKit.Lit(new Color(0.07f, 0.065f, 0.08f), 0.05f));
+
+        StadiumKit.MeshBuilder[] paving = NewBuilders(StoneTones.Length);
+        const float tile = 2.4f;
+        const float gap = 0.09f;
+        for (float x = -ax; x < ax; x += tile)
+        {
+            for (float z = -az; z < az; z += tile)
+            {
+                Vector2 center = new Vector2(x + tile / 2f, z + tile / 2f);
+                if (center.magnitude < ArenaRadius - 0.5f) continue; // 闘技場の下は敷かない
+                float x0 = x + gap, x1 = Mathf.Min(x + tile, ax) - gap;
+                float z0 = z + gap, z1 = Mathf.Min(z + tile, az) - gap;
+                paving[Random.Range(0, paving.Length)].AddQuad(new Vector3(x0, 0.01f, z0), new Vector3(x0, 0.01f, z1),
+                    new Vector3(x1, 0.01f, z1), new Vector3(x1, 0.01f, z0), Vector3.up, Color.white);
+            }
+        }
+        for (int i = 0; i < paving.Length; i++)
+        {
+            StadiumKit.CreateMeshObject("Paving", transform, paving[i].Build(), StadiumKit.Lit(StoneTones[i] * 0.72f, 0.12f));
+        }
     }
 
-    /// <summary>芝のフィールド・白線・センターの魔法陣。</summary>
+    // ==================== 闘技場 ====================
+
+    // 背景画像(BattleArenaBackdrop)と同じ、浮遊島の石造りの円形闘技場
+    private const float ArenaRadius = 16.5f;
+    private const float ArenaHeight = 0.32f;
+    private const float RimWidth = 1.4f;
+    private const float InlayRadius = 13.6f;
+
+    private static readonly Color[] StoneTones =
+    {
+        new Color(0.30f, 0.29f, 0.32f),
+        new Color(0.26f, 0.25f, 0.29f),
+        new Color(0.34f, 0.32f, 0.33f),
+        new Color(0.23f, 0.23f, 0.27f),
+    };
+
+    private static StadiumKit.MeshBuilder[] NewBuilders(int count)
+    {
+        StadiumKit.MeshBuilder[] builders = new StadiumKit.MeshBuilder[count];
+        for (int i = 0; i < count; i++) builders[i] = new StadiumKit.MeshBuilder();
+        return builders;
+    }
+
+    /// <summary>石畳の円形闘技場・金の象嵌の魔法陣・苔・クリスタルの石柱・センターの魔法陣。</summary>
     private void BuildField()
     {
         Transform field = new GameObject("Field").transform;
         field.SetParent(transform, false);
 
-        // 芝(刈り込みのストライプ)
-        StadiumKit.MeshBuilder grassDark = new StadiumKit.MeshBuilder();
-        StadiumKit.MeshBuilder grassLight = new StadiumKit.MeshBuilder();
-        const int stripes = 11;
-        float stripeWidth = FieldHalfX * 2f / stripes;
-        for (int i = 0; i < stripes; i++)
+        // 土台(敷石の目地から見える暗い石)と側面
+        float top = ArenaHeight;
+        StadiumKit.CreateMeshObject("ArenaBase", field, StadiumKit.CreateAnnulus(0f, ArenaRadius, 120, Color.white),
+            StadiumKit.Lit(new Color(0.08f, 0.075f, 0.09f), 0.05f)).transform.localPosition = new Vector3(0f, top - 0.01f, 0f);
+        StadiumKit.MeshBuilder side = new StadiumKit.MeshBuilder();
+        for (int i = 0; i < 120; i++)
         {
-            float x0 = -FieldHalfX + i * stripeWidth, x1 = x0 + stripeWidth;
-            (i % 2 == 0 ? grassDark : grassLight).AddQuad(new Vector3(x0, 0.02f, -FieldHalfZ), new Vector3(x0, 0.02f, FieldHalfZ),
-                new Vector3(x1, 0.02f, FieldHalfZ), new Vector3(x1, 0.02f, -FieldHalfZ), Vector3.up, Color.white);
+            float a0 = Mathf.PI * 2f * i / 120, a1 = Mathf.PI * 2f * (i + 1) / 120;
+            Vector3 d0 = new Vector3(Mathf.Cos(a0), 0f, Mathf.Sin(a0)), d1 = new Vector3(Mathf.Cos(a1), 0f, Mathf.Sin(a1));
+            side.AddQuad(d0 * ArenaRadius, d0 * ArenaRadius + Vector3.up * (top + 0.14f), d1 * ArenaRadius + Vector3.up * (top + 0.14f), d1 * ArenaRadius,
+                (d0 + d1).normalized, Color.white);
         }
-        StadiumKit.CreateMeshObject("GrassDark", field, grassDark.Build(), StadiumKit.Lit(new Color(0.11f, 0.34f, 0.16f), 0.18f));
-        StadiumKit.CreateMeshObject("GrassLight", field, grassLight.Build(), StadiumKit.Lit(new Color(0.15f, 0.42f, 0.20f), 0.18f));
+        StadiumKit.CreateMeshObject("ArenaSide", field, side.Build(), StadiumKit.Lit(new Color(0.20f, 0.19f, 0.22f), 0.08f), true);
 
-        // 白線
-        Color lineColor = new Color(0.93f, 0.95f, 0.92f);
-        StadiumKit.MeshBuilder lines = new StadiumKit.MeshBuilder();
-        const float w = 0.2f;
-        const float y = 0.035f;
-        AddFlatLine(lines, new Vector2(-FieldHalfX, -FieldHalfZ), new Vector2(FieldHalfX, -FieldHalfZ), w, y, lineColor);
-        AddFlatLine(lines, new Vector2(-FieldHalfX, FieldHalfZ), new Vector2(FieldHalfX, FieldHalfZ), w, y, lineColor);
-        AddFlatLine(lines, new Vector2(-FieldHalfX, -FieldHalfZ), new Vector2(-FieldHalfX, FieldHalfZ), w, y, lineColor);
-        AddFlatLine(lines, new Vector2(FieldHalfX, -FieldHalfZ), new Vector2(FieldHalfX, FieldHalfZ), w, y, lineColor);
-        AddFlatLine(lines, new Vector2(0f, -FieldHalfZ), new Vector2(0f, FieldHalfZ), w, y, lineColor);
-        foreach (int side in new[] { -1, 1 })
+        // 敷石: 同心円の輪を角度方向に割った石を、目地の隙間をあけて並べる
+        StadiumKit.MeshBuilder[] stones = NewBuilders(StoneTones.Length);
+        float[] ringEdges = { 0f, 2.2f, 4.6f, 7.0f, 9.4f, 11.8f, ArenaRadius - RimWidth };
+        for (int r = 0; r < ringEdges.Length - 1; r++)
         {
-            float outer = side * FieldHalfX, inner = side * (FieldHalfX - 5f);
-            AddFlatLine(lines, new Vector2(outer, -4.5f), new Vector2(inner, -4.5f), w, y, lineColor);
-            AddFlatLine(lines, new Vector2(outer, 4.5f), new Vector2(inner, 4.5f), w, y, lineColor);
-            AddFlatLine(lines, new Vector2(inner, -4.5f), new Vector2(inner, 4.5f), w, y, lineColor);
+            float inner = ringEdges[r], outer = ringEdges[r + 1];
+            int count = r == 0 ? 1 : Mathf.Max(6, Mathf.RoundToInt(Mathf.PI * (inner + outer) / 2.6f));
+            float offset = Random.value * Mathf.PI * 2f;
+            for (int i = 0; i < count; i++)
+            {
+                float a0 = offset + Mathf.PI * 2f * i / count, a1 = offset + Mathf.PI * 2f * (i + 1) / count;
+                AddStone(stones[Random.Range(0, stones.Length)], inner, outer, a0, a1, top, count > 1 ? 0.07f : 0f);
+            }
         }
-        StadiumKit.CreateMeshObject("Lines", field, lines.Build(), StadiumKit.Unlit(StadiumKit.Blend.Opaque, Color.white));
+        // 外縁の縁石(少し高く、大きい石)
+        StadiumKit.MeshBuilder[] curb = NewBuilders(StoneTones.Length);
+        const int curbCount = 40;
+        for (int i = 0; i < curbCount; i++)
+        {
+            float a0 = Mathf.PI * 2f * i / curbCount, a1 = Mathf.PI * 2f * (i + 1) / curbCount;
+            AddStone(curb[Random.Range(0, curb.Length)], ArenaRadius - RimWidth + 0.06f, ArenaRadius, a0, a1, top + 0.14f, 0.08f);
+        }
+        for (int i = 0; i < stones.Length; i++)
+        {
+            StadiumKit.CreateMeshObject("Flagstones", field, stones[i].Build(), StadiumKit.Lit(StoneTones[i], 0.2f));
+            StadiumKit.CreateMeshObject("Curb", field, curb[i].Build(), StadiumKit.Lit(StoneTones[i] * 1.12f, 0.15f));
+        }
 
-        Material lineMaterial = StadiumKit.Unlit(StadiumKit.Blend.Opaque, lineColor);
-        StadiumKit.CreateMeshObject("CenterCircle", field, StadiumKit.CreateAnnulus(5.0f, 5.22f, 96, Color.white), lineMaterial)
-            .transform.localPosition = new Vector3(0f, y, 0f);
-        StadiumKit.CreateMeshObject("CenterSpot", field, StadiumKit.CreateAnnulus(0f, 1.1f, 48, Color.white), lineMaterial)
-            .transform.localPosition = new Vector3(0f, y, 0f);
-        foreach (int side in new[] { -1, 1 })
+        // 金の象嵌: 外周の円・内側の円・六芒星・中心へ伸びる放射線
+        float y = top + 0.012f;
+        StadiumKit.MeshBuilder inlay = new StadiumKit.MeshBuilder();
+        AddRing(inlay, InlayRadius, 0.16f, y);
+        AddRing(inlay, InlayRadius - 0.45f, 0.06f, y);
+        AddRing(inlay, 5.0f, 0.14f, y);
+        for (int i = 0; i < 6; i++)
         {
-            StadiumKit.CreateMeshObject("FighterMark", field, StadiumKit.CreateAnnulus(2.45f, 2.62f, 64, Color.white), lineMaterial)
-                .transform.localPosition = new Vector3(side * FighterX, y, 0f);
+            float a0 = Mathf.PI * 2f * i / 6 + Mathf.PI / 6f;
+            float a1 = Mathf.PI * 2f * (i + 2) / 6 + Mathf.PI / 6f;
+            AddFlatLine(inlay, Polar(InlayRadius, a0), Polar(InlayRadius, a1), 0.11f, y, Color.white);
+            float spoke = Mathf.PI * 2f * i / 6;
+            AddFlatLine(inlay, Polar(5.0f, spoke), Polar(InlayRadius - 0.45f, spoke), 0.06f, y, Color.white);
         }
+        StadiumKit.CreateMeshObject("GoldInlay", field, inlay.Build(), StadiumKit.Unlit(StadiumKit.Blend.Opaque, StadiumKit.Hdr(OrisamoUI.GoldDeep, 1.35f)));
+
+        // キャラクターの立ち位置: 暗い石の台座と金の円
+        Material markMaterial = StadiumKit.Unlit(StadiumKit.Blend.Opaque, StadiumKit.Hdr(OrisamoUI.Gold, 1.25f));
+        foreach (int s in new[] { -1, 1 })
+        {
+            GameObject pad = StadiumKit.CreateMeshObject("FighterPad", field, StadiumKit.CreateAnnulus(0f, 2.45f, 64, Color.white),
+                StadiumKit.Lit(new Color(0.16f, 0.15f, 0.19f), 0.35f));
+            pad.transform.localPosition = new Vector3(s * FighterX, y + 0.004f, 0f);
+            GameObject mark = StadiumKit.CreateMeshObject("FighterMark", field, StadiumKit.CreateAnnulus(2.45f, 2.68f, 64, Color.white), markMaterial);
+            mark.transform.localPosition = new Vector3(s * FighterX, y + 0.008f, 0f);
+        }
+
+        BuildMoss(field, top);
+        BuildCrystals(field);
 
         // センターの魔法陣(ゆっくり脈打つ光)
         emblemMaterial = StadiumKit.Unlit(StadiumKit.Blend.Additive, Color.white, OrisamoUI.ThinRing.texture);
         GameObject ring = StadiumKit.CreateFlatDecal("EmblemRing", field, 11.8f, emblemMaterial);
-        ring.transform.localPosition = new Vector3(0f, 0.05f, 0f);
+        ring.transform.localPosition = new Vector3(0f, top + 0.05f, 0f);
         ring.AddComponent<SimpleSpin>().degreesPerSecond = 6f;
         emblemGlowMaterial = StadiumKit.Unlit(StadiumKit.Blend.Additive, Color.white, OrisamoUI.SoftGlow.texture);
-        StadiumKit.CreateFlatDecal("EmblemGlow", field, 13f, emblemGlowMaterial).transform.localPosition = new Vector3(0f, 0.045f, 0f);
+        StadiumKit.CreateFlatDecal("EmblemGlow", field, 13f, emblemGlowMaterial).transform.localPosition = new Vector3(0f, top + 0.045f, 0f);
 
         Transform orbs = new GameObject("ElementOrbs").transform;
         orbs.SetParent(field, false);
-        orbs.localPosition = new Vector3(0f, 0.055f, 0f);
+        orbs.localPosition = new Vector3(0f, top + 0.055f, 0f);
         orbs.gameObject.AddComponent<SimpleSpin>().degreesPerSecond = -10f;
         ElementType[] elements = { ElementType.Fire, ElementType.Wind, ElementType.Dark, ElementType.Water, ElementType.Earth, ElementType.Light };
         for (int i = 0; i < elements.Length; i++)
@@ -340,6 +411,125 @@ public sealed class Stadium : MonoBehaviour
             GameObject orb = StadiumKit.CreateFlatDecal("Orb", orbs, 2.2f, orbMaterial);
             orb.transform.localPosition = new Vector3(Mathf.Cos(angle) * 3.3f, 0f, Mathf.Sin(angle) * 3.3f);
         }
+    }
+
+    /// <summary>扇形の敷石1枚(上面のみ)。gapの分だけ四辺を内側に詰めて目地を作る。</summary>
+    private static void AddStone(StadiumKit.MeshBuilder builder, float inner, float outer, float a0, float a1, float y, float gap)
+    {
+        int steps = Mathf.Max(1, Mathf.CeilToInt((a1 - a0) * outer / 0.8f));
+        float ri = inner + (inner > 0f ? gap : 0f), ro = outer - gap;
+        float da = ro > 0f ? gap / ro : 0f;
+        a0 += da;
+        a1 -= da;
+        Vector3 up = Vector3.up * y;
+        for (int i = 0; i < steps; i++)
+        {
+            float b0 = Mathf.Lerp(a0, a1, (float)i / steps), b1 = Mathf.Lerp(a0, a1, (float)(i + 1) / steps);
+            Vector3 d0 = new Vector3(Mathf.Cos(b0), 0f, Mathf.Sin(b0)), d1 = new Vector3(Mathf.Cos(b1), 0f, Mathf.Sin(b1));
+            builder.AddQuad(d0 * ri + up, d0 * ro + up, d1 * ro + up, d1 * ri + up, Vector3.up, Color.white);
+        }
+    }
+
+    private static void AddRing(StadiumKit.MeshBuilder builder, float radius, float width, float y)
+    {
+        const int segments = 128;
+        float ri = radius - width / 2f, ro = radius + width / 2f;
+        Vector3 up = Vector3.up * y;
+        for (int i = 0; i < segments; i++)
+        {
+            float a0 = Mathf.PI * 2f * i / segments, a1 = Mathf.PI * 2f * (i + 1) / segments;
+            Vector3 d0 = new Vector3(Mathf.Cos(a0), 0f, Mathf.Sin(a0)), d1 = new Vector3(Mathf.Cos(a1), 0f, Mathf.Sin(a1));
+            builder.AddQuad(d0 * ri + up, d0 * ro + up, d1 * ro + up, d1 * ri + up, Vector3.up, Color.white);
+        }
+    }
+
+    private static Vector2 Polar(float radius, float angle) => new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+
+    /// <summary>縁石や敷石に生えた苔(柔らかい緑のしみ)。</summary>
+    private static void BuildMoss(Transform parent, float top)
+    {
+        Material moss = StadiumKit.Unlit(StadiumKit.Blend.Alpha, new Color(0.20f, 0.30f, 0.12f, 0.75f), OrisamoUI.SoftGlow.texture);
+        Material mossLight = StadiumKit.Unlit(StadiumKit.Blend.Alpha, new Color(0.32f, 0.42f, 0.16f, 0.55f), OrisamoUI.SoftGlow.texture);
+        for (int i = 0; i < 46; i++)
+        {
+            float angle = Random.value * Mathf.PI * 2f;
+            bool onRim = Random.value < 0.7f;
+            float radius = onRim ? ArenaRadius - Random.Range(0f, RimWidth + 0.8f) : Random.Range(6f, ArenaRadius - 2f);
+            GameObject patch = StadiumKit.CreateFlatDecal("Moss", parent, Random.Range(0.8f, onRim ? 2.6f : 1.4f), Random.value < 0.5f ? moss : mossLight);
+            patch.transform.localPosition = new Vector3(Mathf.Cos(angle) * radius, top + 0.16f + i * 0.0004f, Mathf.Sin(angle) * radius);
+            patch.transform.localRotation = Quaternion.Euler(0f, Random.value * 360f, 0f);
+            patch.transform.localScale = new Vector3(1f, 1f, Random.Range(0.45f, 0.9f));
+        }
+    }
+
+    /// <summary>闘技場の四隅に立つ、青く光るクリスタルの石柱(背景画像のアーチの結晶と同じ意匠)。</summary>
+    private static void BuildCrystals(Transform parent)
+    {
+        Color crystalColor = new Color(0.35f, 0.62f, 1f);
+        Material stone = StadiumKit.Lit(new Color(0.27f, 0.26f, 0.29f), 0.12f);
+        Material crystal = StadiumKit.Unlit(StadiumKit.Blend.Opaque, StadiumKit.Hdr(crystalColor, 2.2f));
+        Material glow = StadiumKit.Unlit(StadiumKit.Blend.Additive, OrisamoUI.WithAlpha(crystalColor, 0.55f), OrisamoUI.SoftGlow.texture);
+
+        foreach (float degrees in new[] { 45f, 135f, 225f, 315f })
+        {
+            float rad = degrees * Mathf.Deg2Rad;
+            Transform pillar = new GameObject("CrystalPillar").transform;
+            pillar.SetParent(parent, false);
+            pillar.localPosition = new Vector3(Mathf.Cos(rad), 0f, Mathf.Sin(rad)) * (ArenaRadius + 1.2f);
+            pillar.localRotation = Quaternion.Euler(0f, -degrees, 0f);
+
+            // 台座(3段の石)
+            AddBlock(pillar, stone, new Vector3(0f, 0.3f, 0f), new Vector3(2.4f, 0.6f, 2.4f));
+            AddBlock(pillar, stone, new Vector3(0f, 1.6f, 0f), new Vector3(1.5f, 2.0f, 1.5f));
+            AddBlock(pillar, stone, new Vector3(0f, 2.75f, 0f), new Vector3(1.9f, 0.3f, 1.9f));
+
+            // 台座の上で回る結晶と、その光
+            GameObject gem = StadiumKit.CreateMeshObject("Crystal", pillar, CreateCrystalMesh(0.65f, 1.7f), crystal);
+            gem.transform.localPosition = new Vector3(0f, 4.3f, 0f);
+            gem.AddComponent<SimpleSpin>().degreesPerSecond = 25f;
+            StadiumKit.CreateFlatDecal("CrystalPool", pillar, 3.6f, glow).transform.localPosition = new Vector3(0f, 2.92f, 0f);
+
+            Light light = new GameObject("CrystalLight").AddComponent<Light>();
+            light.transform.SetParent(pillar, false);
+            light.transform.localPosition = new Vector3(0f, 4.3f, 0f);
+            light.type = LightType.Point;
+            light.color = crystalColor;
+            light.range = 9f;
+            light.intensity = 2.2f;
+            light.shadows = LightShadows.None;
+        }
+    }
+
+    private static void AddBlock(Transform parent, Material material, Vector3 center, Vector3 size)
+    {
+        GameObject block = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        Object.Destroy(block.GetComponent<Collider>());
+        block.name = "Stone";
+        block.transform.SetParent(parent, false);
+        block.transform.localPosition = center;
+        block.transform.localScale = size;
+        block.GetComponent<MeshRenderer>().sharedMaterial = material;
+    }
+
+    /// <summary>上下に尖った六角柱の結晶。</summary>
+    private static Mesh CreateCrystalMesh(float radius, float height)
+    {
+        StadiumKit.MeshBuilder builder = new StadiumKit.MeshBuilder();
+        const int sides = 6;
+        Vector3 topTip = Vector3.up * height * 0.5f, bottomTip = Vector3.down * height * 0.5f;
+        float bandY = height * 0.12f;
+        for (int i = 0; i < sides; i++)
+        {
+            float a0 = Mathf.PI * 2f * i / sides, a1 = Mathf.PI * 2f * (i + 1) / sides;
+            Vector3 d0 = new Vector3(Mathf.Cos(a0), 0f, Mathf.Sin(a0)) * radius, d1 = new Vector3(Mathf.Cos(a1), 0f, Mathf.Sin(a1)) * radius;
+            Vector3 u0 = d0 + Vector3.up * bandY, u1 = d1 + Vector3.up * bandY;
+            Vector3 l0 = d0 + Vector3.down * bandY, l1 = d1 + Vector3.down * bandY;
+            Vector3 n = (d0 + d1).normalized;
+            builder.AddQuad(l0, u0, u1, l1, n, Color.white);
+            builder.AddTriangle(u0, topTip, u1, Color.white, Color.white, Color.white, n);
+            builder.AddTriangle(l1, bottomTip, l0, Color.white, Color.white, Color.white, n);
+        }
+        return builder.Build();
     }
 
     private static void AddFlatLine(StadiumKit.MeshBuilder builder, Vector2 from, Vector2 to, float width, float y, Color color)
