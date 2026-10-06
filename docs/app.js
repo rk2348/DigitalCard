@@ -1,8 +1,8 @@
 // オリサモ カードスキャン用ページ
 // スマホのカメラでQRコード(カードID＋シード値のJSON)を読み取り、名前を入力すると、
 // その場でJavaScript側でキャラクターのステータスを確定させて表示する。
-// Unity(QRScanScene)は起動不要。結果はFirebase Realtime Databaseの /characters に
-// 記録として保存するので、将来Unity側で読み込んで使うこともできる。
+// 登録内容は Firebase Realtime Database の /characterByCard/{cardId} に保存し、
+// 対戦時は /tables/{卓ID}/battleSlots に参加して、/tables/{卓ID}/activeBattle で会場PC(Unity)と同期する。
 
 const firebaseConfig = {
   apiKey: "AIzaSyAQBqecVE538sEoEnB1oJk0-mVCaE2mKL0",
@@ -31,7 +31,37 @@ function createSeededRandom(seed) {
   };
 }
 
+// 卓ID。会場で卓ごとに ?table=table2 のようなURL(QR)を配ることで、複数の卓を同時に運用できる。
+// Unity側の Resources/FirebaseSettings.json の tableId(または起動引数 -table)と一致させる。
+const TABLE_ID = (() => {
+  const value = new URLSearchParams(location.search).get("table");
+  return value && /^[A-Za-z0-9_-]{1,32}$/.test(value) ? value : "table1";
+})();
+const TABLE_PATH = `tables/${TABLE_ID}`;
+
+// 開発者モード。URLに ?dev=1 を付けて開くと、QRコードを読み取らずに
+// 「カードIDの手入力・テストカードの発行」で登録/対戦したり、CPU相手を呼んだりできる。
+// (スマホ1台と会場PCだけで、本番と同じ流れを最後まで確認するための機能)
+const DEV_MODE = new URLSearchParams(location.search).get("dev") === "1";
+const DEV_LAST_CARD_KEY = "orisamo.devLastCardId";
+
 const ELEMENT_TYPES = ["Fire", "Wind", "Dark", "Water", "Earth", "Light"];
+
+// AttackLevel(C#)の定義順 Weak, Normal, Strong に合わせる
+const ATTACK_LEVELS = ["Weak", "Normal", "Strong"];
+const ATTACK_LEVEL_LABELS = { Weak: "弱", Normal: "普", Strong: "強" };
+
+/// カードのシード値から必殺技レベルを決める(C#の BattleRules.ComputeSpecialLevel と同じ結果)。
+/// 能力値用の乱数列と重ならないよう、シードに固定値を混ぜた別の乱数列を使う。名前には依存しない。
+function computeSpecialLevel(seed) {
+  const rand = createSeededRandom((seed ^ 0x5bd1e995) >>> 0);
+  return ATTACK_LEVELS[Math.floor(rand() * 3)];
+}
+
+/// 登録データの必殺技レベル。specialLevel導入前の登録データはシード値から求める。
+function specialLevelOf(record) {
+  return record.specialLevel || computeSpecialLevel(record.seed);
+}
 const SKILL_TYPES = ["PowerBoost", "GuardBoost", "LifeDrain", "Overdrive"];
 const SKILL_NAME_MAP = {
   PowerBoost: "疾風の一撃",
@@ -99,6 +129,7 @@ function generateCharacterStats(seed, characterName) {
     ratio,
     skillName,
     skillDescription,
+    specialLevel: computeSpecialLevel(seed),
   };
 }
 
@@ -156,6 +187,13 @@ const battleTurnNormalBtn = document.getElementById("battle-turn-normal-btn");
 const battleTurnWeakBtn = document.getElementById("battle-turn-weak-btn");
 const battleTurnResultEl = document.getElementById("battle-turn-result");
 const battleTurnHomeBtn = document.getElementById("battle-turn-home-btn");
+const devPanelEl = document.getElementById("dev-panel");
+const devCardIdInput = document.getElementById("dev-card-id");
+const devRegisterBtn = document.getElementById("dev-register-btn");
+const devBattleBtn = document.getElementById("dev-battle-btn");
+const devQuickBattleBtn = document.getElementById("dev-quick-battle-btn");
+const devCpuBtn = document.getElementById("dev-cpu-btn");
+const battleWaitCpuBtn = document.getElementById("battle-wait-cpu-btn");
 
 let scanner = null;
 let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
@@ -177,6 +215,10 @@ let battleQueueListenerHandler = null;
 let battleTurnListenerRef = null;
 let battleTurnListenerHandler = null;
 let myBattleSlot = null; // "player1" または "player2"(このスマホが対戦キューに参加した時のスロット)
+let myQueueJoinedAt = null; // 対戦キューに書き込んだ時刻(自分の枠かどうかの確認用)
+let myBattleRecord = null; // 対戦に参加したキャラクターの登録データ
+let currentMatchId = null; // 参加中の試合のID(前の試合のデータを読まないための目印)
+let turnCountdownTimer = null; // 選択の制限時間の表示用タイマー
 let currentBattleTurnNumber = null; // 現在activeBattleに出ているターン番号
 let currentBattleTurnRole = null; // このターン、自分が"attacker"(攻撃側)か"defender"(防御側)か
 let submittedBattleTurnNumber = -1; // 既に選択を送信済みのターン番号(二重送信・ボタン再表示防止用)
@@ -221,7 +263,7 @@ function init() {
   try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.database();
-    logDebug("Firebaseの初期化に成功しました。");
+    logDebug("Firebaseの初期化に成功しました。卓ID=" + TABLE_ID);
   } catch (e) {
     setStatus("Firebaseの初期化に失敗しました: " + e.message, "error");
     logDebug("エラー(Firebase初期化): " + e);
@@ -235,7 +277,7 @@ function init() {
     location.hostname === "localhost" ||
     location.hostname === "127.0.0.1";
 
-  if (!isSecure) {
+  if (!isSecure && !DEV_MODE) {
     setStatus(
       "この機能はhttps接続でのみ動作します。GitHub PagesのURL(https://...)でアクセスしてください。",
       "error"
@@ -244,7 +286,7 @@ function init() {
     return;
   }
 
-  if (typeof Html5Qrcode === "undefined") {
+  if (typeof Html5Qrcode === "undefined" && !DEV_MODE) {
     setStatus(
       "QRコード読み取りライブラリの読み込みに失敗しました。通信環境を確認して再読み込みしてください。",
       "error"
@@ -253,13 +295,32 @@ function init() {
     return;
   }
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  if ((!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) && !DEV_MODE) {
     setStatus("このブラウザはカメラ機能に対応していません。別のブラウザでお試しください。", "error");
     logDebug("エラー: navigator.mediaDevices.getUserMedia が利用できません");
     return;
   }
 
-  goHome();
+  // 匿名認証でサインインする(Database Rulesで書き込み元を確認するため)。
+  // 匿名認証が無効な場合もエラーにはせず、そのまま利用できるようにする。
+  setStatus("接続しています...");
+  signInAnonymously().finally(() => goHome());
+}
+
+function signInAnonymously() {
+  if (!firebase.auth) {
+    logDebug("firebase-auth が読み込まれていないため、認証なしで接続します");
+    return Promise.resolve();
+  }
+  return firebase
+    .auth()
+    .signInAnonymously()
+    .then((cred) => logDebug("匿名認証に成功しました uid=" + cred.user.uid))
+    .catch((e) => logDebug("匿名認証を利用できないため、認証なしで接続します: " + e));
+}
+
+function currentUid() {
+  return firebase.auth && firebase.auth().currentUser ? firebase.auth().currentUser.uid : null;
 }
 
 /// キャラクター作成モードを開始する: ホームを隠してQRリーダーを表示する。
@@ -303,7 +364,12 @@ function goHome() {
   stopScanner();
   detachBattleQueueListener();
   detachBattleTurnListener();
+  leaveBattleQueue();
+  stopDevBot(true);
   myBattleSlot = null;
+  myQueueJoinedAt = null;
+  myBattleRecord = null;
+  currentMatchId = null;
 
   mutationVignetteEl.classList.remove("active");
   hideReader();
@@ -313,7 +379,9 @@ function goHome() {
   battleWaitSectionEl.style.display = "none";
   battleTurnSectionEl.style.display = "none";
   homeSectionEl.style.display = "block";
-  setStatus("やりたいことを選んでください");
+  if (devPanelEl) devPanelEl.style.display = DEV_MODE ? "block" : "none";
+  if (battleWaitCpuBtn) battleWaitCpuBtn.style.display = "none";
+  setStatus(DEV_MODE ? "開発者モード: QRコードなしでも操作できます" : "やりたいことを選んでください");
 }
 
 /// QRスキャナーを停止し、カメラを解放する(対戦キュー待機画面やホームに戻る際に呼ぶ)。
@@ -325,6 +393,19 @@ function stopScanner() {
     .stop()
     .then(() => runningScanner.clear())
     .catch((e) => logDebug("エラー(スキャナー停止): " + e));
+}
+
+/// 対戦相手を待っている途中でホームに戻った場合、自分の枠を空ける(他の人が参加できるように)。
+/// 既に試合が始まって枠がクリアされた後や、別の人の枠になっている場合は何もしない。
+function leaveBattleQueue() {
+  if (!myBattleSlot || myQueueJoinedAt == null || currentMatchId) return;
+  const joinedAt = myQueueJoinedAt;
+  db.ref(`${TABLE_PATH}/battleSlots/${myBattleSlot}`)
+    .transaction((current) => {
+      if (current === null) return null;
+      return current.timestamp === joinedAt ? null : undefined;
+    })
+    .catch((e) => logDebug("エラー(対戦キューからの離脱): " + e));
 }
 
 /// 対戦相手待ちのリアルタイム監視リスナーを解除する(二重登録・メモリリーク防止)。
@@ -395,9 +476,43 @@ function onScanSuccess(decodedText) {
     return;
   }
 
-  scannedCardData = cardData;
-  capturedCutoutDataUrl = null;
-  showPhotoCapture(cardData);
+  confirmOverwriteIfRegistered(cardData);
+}
+
+/// 作成モードで読み取ったカードが登録済みなら、上書きしてよいか確認してから撮影に進む。
+/// (確認なしで上書きすると、別の人のキャラクターが消えてしまうため)
+function confirmOverwriteIfRegistered(cardData) {
+  if (isSending) return;
+  isSending = true;
+  isAwaitingName = true; // 確認中に同じQRを読み続けないようにする
+
+  db.ref("characterByCard/" + cardData.cardId)
+    .once("value")
+    .then((snapshot) => {
+      const existing = snapshot.val();
+      if (existing && existing.characterName) {
+        const ok = window.confirm(
+          `このカードは「${existing.characterName}」として登録済みです。\n` +
+            "登録し直すと、名前と写真が上書きされます(能力値は変わりません)。続けますか？"
+        );
+        if (!ok) {
+          isAwaitingName = false;
+          setStatus("キャラクターにするカードのQRコードをカメラにかざしてください");
+          return;
+        }
+      }
+      scannedCardData = cardData;
+      capturedCutoutDataUrl = null;
+      showPhotoCapture(cardData);
+    })
+    .catch((e) => {
+      isAwaitingName = false;
+      logDebug("エラー(登録済みかの確認): " + e);
+      setStatus("通信に失敗しました。もう一度読み取ってください", "error");
+    })
+    .finally(() => {
+      isSending = false;
+    });
 }
 
 /// 対戦開始モードでQRを読み取った時の処理。
@@ -423,8 +538,10 @@ function handleBattleQrScanned(cardData) {
       }
 
       stopScanner();
+      myBattleRecord = record;
       showBattleWait(record);
-      joinBattleQueue({ ...record, timestamp: Date.now() });
+      myQueueJoinedAt = Date.now();
+      joinBattleQueue({ ...record, specialLevel: specialLevelOf(record), uid: currentUid(), timestamp: myQueueJoinedAt });
     })
     .catch((e) => {
       isSending = false;
@@ -441,7 +558,7 @@ function showBattleWait(record) {
   statusDisplaySectionEl.style.display = "none";
   battleWaitSectionEl.style.display = "block";
 
-  battleWaitNameEl.textContent = record.characterName;
+  battleWaitNameEl.textContent = `${record.characterName}（必殺技レベル「${ATTACK_LEVEL_LABELS[specialLevelOf(record)]}」）`;
   if (record.photoDataUrl) {
     battleWaitPhotoEl.src = record.photoDataUrl;
     battleWaitPhotoEl.style.display = "block";
@@ -449,7 +566,8 @@ function showBattleWait(record) {
     battleWaitPhotoEl.src = "";
     battleWaitPhotoEl.style.display = "none";
   }
-  battleWaitStatusEl.textContent = "対戦キューに参加しています...";
+  battleWaitStatusEl.textContent = `対戦キュー(卓 ${TABLE_ID})に参加しています...`;
+  if (battleWaitCpuBtn) battleWaitCpuBtn.style.display = DEV_MODE && !devBot ? "block" : "none";
 }
 
 /// 対戦キューの状況メッセージを、下部のステータスバーと待機画面の両方に反映する。
@@ -600,7 +718,10 @@ function showStatusDisplay(stats) {
       spawnSparkles(stats.isMutation ? 20 : 9);
 
       setTimeout(() => {
-        setStatus(stats.characterName + " を登録しました！", "success");
+        setStatus(
+          `${stats.characterName} を登録しました！必殺技レベルは「${ATTACK_LEVEL_LABELS[stats.specialLevel]}」です`,
+          "success"
+        );
       }, 700);
     }, 450);
   }, 950);
@@ -862,9 +983,9 @@ skipPhotoBtn.addEventListener("click", () => {
 /// PC(Unity)側は一切QRコードを読み取らず、この2枠が両方埋まるのをポーリングで
 /// 待つだけの設計にしている。2台のスマホがほぼ同時に登録した場合の競合を避けるため、
 /// 単純なset()ではなくtransaction()で「今空いているか」をアトミックに確認してから書き込む。
-function joinBattleQueue(recordData) {
-  const slot1Ref = db.ref("battleSlots/player1");
-  const slot2Ref = db.ref("battleSlots/player2");
+function joinBattleQueue(recordData, onJoined = onJoinedBattleQueue, onFull = null) {
+  const slot1Ref = db.ref(`${TABLE_PATH}/battleSlots/player1`);
+  const slot2Ref = db.ref(`${TABLE_PATH}/battleSlots/player2`);
 
   slot1Ref.transaction(
     (current) => (current === null ? recordData : undefined), // undefinedを返すと競合とみなされ書き込まれない
@@ -874,7 +995,7 @@ function joinBattleQueue(recordData) {
         return;
       }
       if (committed) {
-        onJoinedBattleQueue("player1");
+        onJoined("player1");
         return;
       }
 
@@ -887,7 +1008,9 @@ function joinBattleQueue(recordData) {
             return;
           }
           if (committed2) {
-            onJoinedBattleQueue("player2");
+            onJoined("player2");
+          } else if (onFull) {
+            onFull();
           } else {
             setBattleStatus("現在、対戦の順番待ちが満席です。少し待ってからもう一度お試しください", "error");
           }
@@ -904,7 +1027,8 @@ function onJoinedBattleQueue(mySlot) {
   const slotLabel = mySlot === "player1" ? "プレイヤー1" : "プレイヤー2";
   setBattleStatus(`対戦キューに参加しました(${slotLabel})。相手を待っています…`, "success");
 
-  const slotsRef = db.ref("battleSlots");
+  myBattleSlot = mySlot;
+  const slotsRef = db.ref(`${TABLE_PATH}/battleSlots`);
   const handler = slotsRef.on("value", (snapshot) => {
     const slots = snapshot.val();
 
@@ -930,6 +1054,7 @@ function onJoinedBattleQueue(mySlot) {
 /// ダメージ計算・演出・勝敗判定はすべてPC(Unity)側が行う(このスマホは選択と結果表示のみ)。
 function startBattleTurnListener(mySlot) {
   myBattleSlot = mySlot;
+  currentMatchId = null;
   currentBattleTurnNumber = null;
   currentBattleTurnRole = null;
   submittedBattleTurnNumber = -1;
@@ -941,54 +1066,121 @@ function startBattleTurnListener(mySlot) {
   hideBattleTurnButtons();
   setBattleTurnPrompt("対戦の準備をしています…");
 
-  const ref = db.ref("activeBattle");
+  const ref = db.ref(`${TABLE_PATH}/activeBattle`);
   const handler = ref.on("value", (snapshot) => {
     const data = snapshot.val();
 
-    if (!data) {
+    if (!data || !data.matchId) {
       setBattleTurnPrompt("対戦の準備をしています…");
       hideBattleTurnButtons();
       return;
     }
 
-    if (data.status === "finished") {
-      detachBattleTurnListener();
-      const won = data.winnerSlot === myBattleSlot;
-      hideBattleTurnButtons();
-      battleTurnResultEl.textContent = won ? "勝利！おめでとうございます🎉" : "敗北…また挑戦してください";
-      battleTurnResultEl.className = "battle-turn-result " + (won ? "win" : "lose");
-      battleTurnResultEl.style.display = "block";
-      battleTurnHomeBtn.style.display = "block";
+    // 試合IDの確定。会場PCは枠をクリアする前に新しい試合IDで初期化するので、
+    // 最初に見える「開始前/選択中」のデータが自分の試合になる。
+    // 前の試合の終了データ(finished/aborted)を自分の試合と取り違えないよう、それらでは確定させない。
+    if (!currentMatchId) {
+      if (data.status !== "starting" && data.status !== "choosing") return;
+      const expectedUid = data[`${mySlot}Uid`];
+      const uid = currentUid();
+      if (expectedUid && uid && expectedUid !== uid) {
+        finishBattleView("この対戦には参加できませんでした。もう一度エントリーしてください", "lose");
+        return;
+      }
+      currentMatchId = data.matchId;
+    }
+    if (data.matchId !== currentMatchId) return;
+
+    if (data.status === "aborted") {
+      finishBattleView("対戦は運営者により中断されました。もう一度エントリーしてください", "lose");
       return;
     }
 
-    if (data.status !== "choosing") return;
+    if (data.status === "finished") {
+      const reason =
+        data.endReason === "judgement"
+          ? "（残りHPによる判定）"
+          : data.endReason === "forfeit"
+            ? "（応答なしによる不戦敗/不戦勝）"
+            : "";
+      if (data.winnerSlot === "draw") {
+        finishBattleView("引き分け" + reason, "win");
+      } else if (data.winnerSlot === mySlot) {
+        finishBattleView("勝利！おめでとうございます🎉" + reason, "win");
+      } else {
+        finishBattleView("敗北…また挑戦してください" + reason, "lose");
+      }
+      return;
+    }
 
+    if (data.status !== "choosing") {
+      setBattleTurnPrompt("対戦の準備をしています…");
+      hideBattleTurnButtons();
+      return;
+    }
+
+    const turnChanged = currentBattleTurnNumber !== data.turn;
     currentBattleTurnNumber = data.turn;
 
-    const isAttacker = data.attackerSlot === myBattleSlot;
-    const isDefender = data.defenderSlot === myBattleSlot;
+    const isAttacker = data.attackerSlot === mySlot;
+    const isDefender = data.defenderSlot === mySlot;
 
     if (!isAttacker && !isDefender) {
       currentBattleTurnRole = null;
+      stopTurnCountdown();
       setBattleTurnPrompt("相手のターンです。PC画面をご覧ください");
       hideBattleTurnButtons();
       return;
     }
 
     if (submittedBattleTurnNumber === data.turn) {
+      stopTurnCountdown();
       setBattleTurnPrompt("相手の選択を待っています…");
       hideBattleTurnButtons();
       return;
     }
 
     currentBattleTurnRole = isAttacker ? "attacker" : "defender";
-    setBattleTurnPrompt(isAttacker ? "攻撃の強さを選んでください！" : "防御の強さを選んでください！");
     showBattleTurnButtons();
+    if (turnChanged) startTurnCountdown(data.timeoutSeconds || 30, isAttacker);
   });
 
   battleTurnListenerRef = ref;
   battleTurnListenerHandler = handler;
+}
+
+/// 対戦の終了(勝敗・中断)を表示して、監視をやめる。
+function finishBattleView(text, type) {
+  detachBattleTurnListener();
+  stopTurnCountdown();
+  hideBattleTurnButtons();
+  setBattleTurnPrompt("");
+  battleTurnResultEl.textContent = text;
+  battleTurnResultEl.className = "battle-turn-result " + type;
+  battleTurnResultEl.style.display = "block";
+  battleTurnHomeBtn.style.display = "block";
+}
+
+/// 選択の制限時間を表示する(時間切れの判定は会場PCが行い、未選択の側は「普」になる)。
+function startTurnCountdown(seconds, isAttacker) {
+  stopTurnCountdown();
+  const special = myBattleRecord ? ATTACK_LEVEL_LABELS[specialLevelOf(myBattleRecord)] : null;
+  const base = isAttacker
+    ? "攻撃の強さを選んでください！" + (special ? `（必殺技レベル「${special}」）` : "")
+    : "防御の強さを選んでください！";
+  const deadline = Date.now() + seconds * 1000;
+  const render = () => {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    setBattleTurnPrompt(`${base} 残り${remaining}秒`);
+    if (remaining === 0) stopTurnCountdown();
+  };
+  render();
+  turnCountdownTimer = setInterval(render, 500);
+}
+
+function stopTurnCountdown() {
+  if (turnCountdownTimer) clearInterval(turnCountdownTimer);
+  turnCountdownTimer = null;
 }
 
 function detachBattleTurnListener() {
@@ -997,6 +1189,7 @@ function detachBattleTurnListener() {
   }
   battleTurnListenerRef = null;
   battleTurnListenerHandler = null;
+  stopTurnCountdown();
 }
 
 function setBattleTurnPrompt(text) {
@@ -1011,18 +1204,29 @@ function hideBattleTurnButtons() {
   battleTurnButtonsEl.style.display = "none";
 }
 
-/// 強/普/弱ボタンが押された時の処理。選択内容をactiveBattleの該当キーに書き込むだけ。
+/// 強/普/弱ボタンが押された時の処理。
+/// 選択はターン番号ごとの場所(activeBattle/choices/{turn}/{attacker|defender})に書き込むため、
+/// 通信が遅れて届いても次のターンの選択として扱われることはない。
 function submitBattleTurnChoice(level) {
   if (currentBattleTurnRole == null || currentBattleTurnNumber == null) return;
 
-  const key = currentBattleTurnRole === "attacker" ? "attackerChoice" : "defenderChoice";
-  submittedBattleTurnNumber = currentBattleTurnNumber;
+  const turn = currentBattleTurnNumber;
+  submittedBattleTurnNumber = turn;
+  stopTurnCountdown();
   hideBattleTurnButtons();
   setBattleTurnPrompt("相手の選択を待っています…");
 
-  db.ref(`activeBattle/${key}`).set(level).catch((e) => {
-    logDebug("エラー(activeBattle選択の書き込み): " + e);
-  });
+  db.ref(`${TABLE_PATH}/activeBattle/choices/${turn}/${currentBattleTurnRole}`)
+    .set(level)
+    .catch((e) => {
+      logDebug("エラー(選択の書き込み): " + e);
+      // 書き込めなかった場合は、もう一度選べるようにする
+      if (currentBattleTurnNumber === turn) {
+        submittedBattleTurnNumber = -1;
+        setBattleTurnPrompt("送信に失敗しました。もう一度選んでください");
+        showBattleTurnButtons();
+      }
+    });
 }
 
 registerBtn.addEventListener("click", () => {
@@ -1056,8 +1260,11 @@ registerBtn.addEventListener("click", () => {
     recordData.photoDataUrl = capturedCutoutDataUrl;
   }
 
+  // 履歴(/characters)には写真を含めない。写真は characterByCard の最新1件だけに保存し、
+  // イベント終了後の削除対象を限定する(tools/purge_event_data.py)。
+  const { photoDataUrl: _omitPhoto, ...historyData } = recordData;
   db.ref("characters")
-    .push(recordData)
+    .push(historyData)
     .catch((e) => {
       logDebug("エラー(Firebase保存、表示は続行します): " + e);
     });
@@ -1073,6 +1280,8 @@ registerBtn.addEventListener("click", () => {
 
   // キャラクター作成はここで完了。対戦キューへの参加は「Battleを始める」モードで
   // 改めてこのカードのQRを読み取った時に行う(characterByCardの内容をそのまま使う)。
+
+  if (DEV_MODE) rememberDevCard(scannedCardData.cardId);
 
   showStatusDisplay(stats);
   isSending = false;
@@ -1122,5 +1331,199 @@ battleTurnHomeBtn.addEventListener("click", () => {
 revealHomeBtn.addEventListener("click", () => {
   goHome();
 });
+
+// ==================== 開発者モード(?dev=1) ====================
+// QRコードを読み取る代わりに、カードIDの手入力やテストカードの発行で操作する。
+// 「CPU相手を呼ぶ」は、このスマホと同じ匿名ユーザーとしてもう一方の枠に参加し、
+// 自分の番が来たら自動で「強/普/弱」を選ぶ。Database Rules上も本人の書き込みとして扱われる。
+
+let devBot = null; // { slot, name, timestamp, specialLevel, ref, handler, answeredTurn, timer }
+
+function randomSeed() {
+  const values = new Uint32Array(1);
+  crypto.getRandomValues(values);
+  return values[0] & 0x7fffffff; // C#のintでも扱える正の値
+}
+
+function newDevCardId() {
+  return "dev-" + randomSeed().toString(16).padStart(8, "0");
+}
+
+/// 未登録のカードIDから、毎回同じシード値を作る(同じIDで登録し直しても能力値が変わらないように)
+function seedFromText(text) {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) & 0x7fffffff;
+}
+
+function rememberDevCard(cardId) {
+  try {
+    localStorage.setItem(DEV_LAST_CARD_KEY, cardId);
+  } catch (e) {
+    logDebug("最後のテストカードIDを保存できませんでした: " + e);
+  }
+  if (devCardIdInput) devCardIdInput.value = cardId;
+}
+
+function lastDevCard() {
+  try {
+    return localStorage.getItem(DEV_LAST_CARD_KEY) || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function isValidCardId(cardId) {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(cardId);
+}
+
+/// 「このIDで登録」: QRを読み取った時と同じく、撮影 → 名前入力 → 登録 の流れに進む。
+function devRegister() {
+  const typed = devCardIdInput.value.trim();
+  if (typed && !isValidCardId(typed)) {
+    setStatus("カードIDは英数字・ハイフン・アンダースコアで入力してください", "error");
+    return;
+  }
+  const cardId = typed || newDevCardId();
+  setStatus("カード情報を確認しています...");
+  db.ref("characterByCard/" + cardId)
+    .once("value")
+    .then((snapshot) => {
+      const existing = snapshot.val();
+      const seed = existing && existing.seed != null ? existing.seed : typed ? seedFromText(typed) : randomSeed();
+      appMode = "create";
+      homeSectionEl.style.display = "none";
+      backToHomeBtn.style.display = "inline-block";
+      logDebug(`開発者モード: QRの代わりにカード ${cardId} (seed=${seed}) を使います`);
+      confirmOverwriteIfRegistered({ cardId, seed });
+    })
+    .catch((e) => {
+      logDebug("エラー(開発者モードの登録確認): " + e);
+      setStatus("通信に失敗しました。もう一度お試しください", "error");
+    });
+}
+
+/// 「このIDで対戦」: 登録済みのカードで対戦キューに参加する(QRを読み取った時と同じ処理)。
+function devBattle() {
+  const cardId = devCardIdInput.value.trim() || lastDevCard();
+  if (!cardId) {
+    setStatus("カードIDを入力するか、先に「このIDで登録」でテストカードを登録してください", "error");
+    return;
+  }
+  if (!isValidCardId(cardId)) {
+    setStatus("カードIDは英数字・ハイフン・アンダースコアで入力してください", "error");
+    return;
+  }
+  appMode = "battle";
+  homeSectionEl.style.display = "none";
+  backToHomeBtn.style.display = "inline-block";
+  handleBattleQrScanned({ cardId });
+}
+
+/// 「テストキャラで今すぐ対戦」: 登録を省略し、その場で作ったキャラクターで対戦キューに参加する。
+function devQuickBattle() {
+  const seed = randomSeed();
+  const stats = generateCharacterStats(seed, "テスト" + String(seed % 1000).padStart(3, "0"));
+  const record = { cardId: newDevCardId(), seed, timestamp: Date.now(), ...stats };
+  appMode = "battle";
+  homeSectionEl.style.display = "none";
+  myBattleRecord = record;
+  showBattleWait(record);
+  myQueueJoinedAt = Date.now();
+  joinBattleQueue({ ...record, uid: currentUid(), timestamp: myQueueJoinedAt });
+}
+
+/// 「CPU相手を呼ぶ」: 空いている枠にCPUを参加させ、CPUの番では自動で選択する。
+function devCallCpu() {
+  if (devBot) {
+    setStatus("CPU相手は既に参加しています");
+    return;
+  }
+  const seed = randomSeed();
+  const stats = generateCharacterStats(seed, "CPU" + String(seed % 1000).padStart(3, "0"));
+  const timestamp = Date.now();
+  const record = { cardId: newDevCardId(), seed, timestamp, ...stats, uid: currentUid() };
+  setStatus("CPU相手を呼んでいます...");
+  joinBattleQueue(
+    record,
+    (slot) => {
+      devBot = {
+        slot,
+        name: record.characterName,
+        timestamp,
+        specialLevel: record.specialLevel,
+        ref: null,
+        handler: null,
+        answeredTurn: null,
+        timer: null,
+      };
+      startDevBot();
+      if (battleWaitCpuBtn) battleWaitCpuBtn.style.display = "none";
+      const slotLabel = slot === "player1" ? "プレイヤー1" : "プレイヤー2";
+      setStatus(`CPU相手「${record.characterName}」が${slotLabel}として参加しました`, "success");
+    },
+    () => setStatus("空いている枠がありません。先に対戦キューを空けてください", "error")
+  );
+}
+
+function startDevBot() {
+  const ref = db.ref(`${TABLE_PATH}/activeBattle`);
+  const handler = ref.on("value", (snapshot) => {
+    const data = snapshot.val();
+    if (!devBot || !data || data[`${devBot.slot}Name`] !== devBot.name) return; // CPUが参加している試合だけを見る
+
+    if (data.status === "finished" || data.status === "aborted") {
+      logDebug("開発者モード: CPU相手の試合が終わりました");
+      stopDevBot(false);
+      return;
+    }
+    if (data.status !== "choosing" || data.turnKey == null || devBot.answeredTurn === data.turnKey) return;
+
+    const role = data.attackerSlot === devBot.slot ? "attacker" : data.defenderSlot === devBot.slot ? "defender" : null;
+    if (!role) return;
+
+    const turnKey = data.turnKey;
+    devBot.answeredTurn = turnKey;
+    // 人が考えているように少し間を置いてから選ぶ。攻撃時はやや必殺技レベルを狙う
+    const level =
+      role === "attacker" && Math.random() < 0.4 ? devBot.specialLevel : ATTACK_LEVELS[Math.floor(Math.random() * 3)];
+    devBot.timer = setTimeout(() => {
+      db.ref(`${TABLE_PATH}/activeBattle/choices/${turnKey}/${role}`)
+        .set(level)
+        .then(() => logDebug(`開発者モード: CPUが${role === "attacker" ? "攻撃" : "防御"}で「${ATTACK_LEVEL_LABELS[level]}」を選びました`))
+        .catch((e) => logDebug("エラー(CPUの選択の書き込み): " + e));
+    }, 1200 + Math.random() * 2500);
+  });
+  devBot.ref = ref;
+  devBot.handler = handler;
+}
+
+/// CPU相手を止める。leaveSlotなら、まだ試合が始まっていない場合に枠を空ける。
+function stopDevBot(leaveSlot) {
+  if (!devBot) return;
+  const bot = devBot;
+  devBot = null;
+  if (bot.timer) clearTimeout(bot.timer);
+  if (bot.ref && bot.handler) bot.ref.off("value", bot.handler);
+  if (!leaveSlot) return;
+  db.ref(`${TABLE_PATH}/battleSlots/${bot.slot}`)
+    .transaction((current) => {
+      if (current === null) return null;
+      return current.timestamp === bot.timestamp ? null : undefined;
+    })
+    .catch((e) => logDebug("エラー(CPU相手の枠を空ける): " + e));
+}
+
+if (DEV_MODE) {
+  devRegisterBtn.addEventListener("click", devRegister);
+  devBattleBtn.addEventListener("click", devBattle);
+  devQuickBattleBtn.addEventListener("click", devQuickBattle);
+  devCpuBtn.addEventListener("click", devCallCpu);
+  battleWaitCpuBtn.addEventListener("click", devCallCpu);
+  devCardIdInput.value = lastDevCard();
+}
 
 init();

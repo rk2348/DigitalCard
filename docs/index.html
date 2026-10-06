@@ -7,31 +7,47 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700;800&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Shippori+Antique+B1&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
     rel="stylesheet"
   />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div class="arena-backdrop"></div>
   <div class="mutation-vignette" id="mutation-vignette"></div>
   <div class="stage-spotlight"></div>
   <div class="stage-dust" id="stage-dust"></div>
 
   <div class="container">
-    <div class="brand-mark">⬡</div>
-    <h1>オリサモ カードスキャン</h1>
+    <header class="brand">
+      <div class="brand-mark" aria-hidden="true"><span>召</span></div>
+      <h1><span class="brand-logo">ORISAMO</span><span class="brand-sub">カードスキャン</span></h1>
+    </header>
 
     <div id="home-section" class="home-section">
       <p class="home-lead">やりたいことを選んでください</p>
       <div class="home-buttons">
         <button id="create-character-btn" class="home-btn home-btn-create">
-          <span class="home-btn-icon">🎴</span>
+          <span class="home-btn-icon">召</span>
           <span class="home-btn-label">カードを登録</span>
         </button>
         <button id="start-battle-btn" class="home-btn home-btn-battle">
-          <span class="home-btn-icon">⚔️</span>
+          <span class="home-btn-icon">戦</span>
           <span class="home-btn-label">対戦する</span>
         </button>
+      </div>
+
+      <!-- 開発者モード(URLに ?dev=1 を付けた時だけ表示)。QRコードを読み取らずに登録・対戦できる -->
+      <div id="dev-panel" class="dev-panel" style="display: none;">
+        <p class="dev-panel-title">開発者モード<span>QRコードなしで操作できます</span></p>
+        <label class="dev-label" for="dev-card-id">カードID（空欄なら新しいテストカードを発行）</label>
+        <input id="dev-card-id" class="dev-input" type="text" autocomplete="off" spellcheck="false" placeholder="例: dev-1a2b3c4d" />
+        <div class="dev-buttons">
+          <button id="dev-register-btn" class="dev-btn">このIDで登録</button>
+          <button id="dev-battle-btn" class="dev-btn">このIDで対戦</button>
+          <button id="dev-quick-battle-btn" class="dev-btn dev-btn-wide">テストキャラで今すぐ対戦</button>
+          <button id="dev-cpu-btn" class="dev-btn dev-btn-wide dev-btn-cpu">CPU相手を呼ぶ（空いている枠に参加）</button>
+        </div>
       </div>
     </div>
 
@@ -53,6 +69,7 @@
       <img id="battle-wait-photo" class="battle-wait-photo" src="" alt="" style="display: none;" />
       <h2 id="battle-wait-name" class="battle-wait-name"></h2>
       <p id="battle-wait-status" class="battle-wait-status">対戦キューに参加しています…</p>
+      <button id="battle-wait-cpu-btn" class="dev-btn dev-btn-wide dev-btn-cpu" style="display: none;">開発者: CPU相手を呼ぶ</button>
       <button id="battle-home-btn" class="secondary">ホームに戻る</button>
     </div>
 
@@ -93,7 +110,7 @@
         <div class="reveal-card" id="reveal-card">
           <div class="reveal-card-inner" id="reveal-card-inner">
             <div class="reveal-card-face reveal-card-back">
-              <div class="crest-glyph">⬡</div>
+              <div class="crest-glyph"><span>召</span></div>
               <p class="crest-caption">ORISAMO CARD</p>
             </div>
 
@@ -134,6 +151,7 @@
   </div>
 
   <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-database-compat.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="app.js"></script>
