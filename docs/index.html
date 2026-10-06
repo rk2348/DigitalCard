@@ -10,7 +10,7 @@
     href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Shippori+Antique+B1&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=0.2.0" />
 </head>
 <body>
   <div class="arena-backdrop"></div>
@@ -132,6 +132,9 @@
               <img id="card-art" class="card-art" src="" alt="" />
 
               <img id="card-character-cutout" class="card-character-cutout" src="" alt="" style="display: none;" />
+              <!-- 写真の上に、カード画像のステータス欄と属性マークだけを重ね直す(写真で隠れないように) -->
+              <img id="card-art-stats" class="card-art-layer card-art-stats" src="" alt="" />
+              <img id="card-art-emblem" class="card-art-layer card-art-emblem" src="" alt="" />
 
               <p id="mutation-badge" class="mutation-badge" style="display: none;">★ 突然変異 ★</p>
 
@@ -169,6 +172,6 @@
   <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-database-compat.js"></script>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=0.2.0"></script>
 </body>
 </html>

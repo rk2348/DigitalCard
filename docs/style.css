@@ -1111,14 +1111,34 @@ h1 {
    ※座標(%)はカード画像の実寸(白枠の内側)から算出。 */
 .card-character-cutout {
   position: absolute;
-  top: 14.8%;
-  left: 6.9%;
-  width: 86%;
-  height: 55.9%;
-  object-fit: cover;
-  object-position: center;
+  top: 15.3%;
+  left: 7.4%;
+  width: 85.1%;
+  height: 55.1%;
+  /* 切り抜いたキャラクター全体が枠に収まるようにする(coverだと頭や足が切れる) */
+  object-fit: contain;
+  object-position: 40% 100%;
   opacity: 0;
+  z-index: 5;
+}
+
+/* カード画像の一部(ステータス欄・属性マーク)を写真の上に重ねて、写真がはみ出して見えないようにする。
+   座標(%)はカード画像の実寸(826×1151)から算出。 */
+.card-art-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   z-index: 6;
+  pointer-events: none;
+}
+
+.card-art-stats {
+  clip-path: polygon(65.4% 50%, 93.8% 50%, 93.8% 71.2%, 65.4% 71.2%, 60% 67.5%, 65.4% 64.1%, 60% 60.7%, 65.4% 57.3%, 60% 53.8%);
+}
+
+.card-art-emblem {
+  clip-path: circle(11.2cqw at 82.7% 14.4%);
 }
 
 .reveal-card.reveal-pop .card-character-cutout {
@@ -1156,15 +1176,19 @@ h1 {
 
 .overlay-defense {
   position: absolute;
-  top: 19%;
+  top: 17%;
   left: 9.5%;
-  font-size: clamp(0.62rem, 2.4vw, 0.75rem);
-  color: #2a2118;
-  background: rgba(245, 239, 228, 0.85);
-  border: 1px solid rgba(0, 0, 0, 0.25);
+  font-size: 4.2cqw;
+  line-height: 1;
+  color: #fff;
+  background: linear-gradient(180deg, #4b7fd1, #23467f);
+  border: 0.5cqw solid #0d2240;
   border-radius: 999px;
-  padding: 2px 8px;
-  font-weight: 700;
+  padding: 1cqw 2.6cqw 1.1cqw 2.2cqw;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0.3cqw 0 rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0.6cqw 1.6cqw rgba(0, 0, 0, 0.35);
   opacity: 0;
   z-index: 7;
 }
@@ -1203,34 +1227,39 @@ h1 {
   100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
+/* ステータスの数値。カード画像の白い欄(x 597〜768、各行の中心 y 619 / 699 / 776)の中央に置く。
+   白地の上で読みやすいよう、アイコンと同じ系統の濃い色にする */
 .overlay-value {
   position: absolute;
-  left: 74%;
-  width: 18%;
-  text-align: center;
+  left: 72.3%;
+  width: 20.7%;
+  height: 6.3%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-body);
   font-weight: 900;
-  font-size: 7.3cqw;
+  font-size: 8.4cqw;
   line-height: 1;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
-  -webkit-text-stroke: 0.45cqw #042433;
-  paint-order: stroke fill;
   opacity: 0;
   z-index: 7;
 }
 
 .overlay-hp {
-  top: 51.5%;
-  color: #8ed973;
+  top: 50.6%;
+  color: #1f7a12;
 }
 
 .overlay-atk {
-  top: 58.3%;
-  color: #c00000;
+  top: 57.6%;
+  color: #b30000;
 }
 
 .overlay-spd {
-  top: 65.1%;
-  color: #83cbeb;
+  top: 64.3%;
+  color: #0b62a3;
 }
 
 .reveal-card.reveal-pop .overlay-value {
@@ -1269,18 +1298,19 @@ h1 {
 }
 
 .skill-name {
-  margin: 0 0 3px;
-  font-weight: 700;
-  color: #000;
-  font-size: 4.4cqw;
+  margin: 0 0 1.2cqw;
+  font-weight: 900;
+  color: #0d1b2a;
+  font-size: 4.8cqw;
   line-height: 1.15;
 }
 
 .skill-description {
   margin: 0;
-  font-size: 2.6cqw;
-  color: #4a4032;
-  line-height: 1.4;
+  font-size: 3.4cqw;
+  font-weight: 700;
+  color: #26313d;
+  line-height: 1.45;
 }
 
 /* スパークル演出。カードめくり時に短く弾ける */

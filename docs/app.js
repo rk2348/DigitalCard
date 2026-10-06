@@ -5,7 +5,8 @@
 // 対戦時は /tables/{卓ID}/battleSlots に参加して、/tables/{卓ID}/activeBattle で会場PC(Unity)と同期する。
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
-const APP_VERSION = "0.1.0";
+// 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
+const APP_VERSION = "0.2.0";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {
@@ -172,6 +173,7 @@ const flashBulbsEl = document.getElementById("flash-bulbs");
 const mutationVignetteEl = document.getElementById("mutation-vignette");
 const sparkleLayerEl = document.getElementById("sparkle-layer");
 const cardArtEl = document.getElementById("card-art");
+const cardArtLayerEls = document.querySelectorAll(".card-art-layer");
 const mutationBadgeEl = document.getElementById("mutation-badge");
 const resultCharacterNameEl = document.getElementById("result-character-name");
 const resultAttackEl = document.getElementById("result-attack");
@@ -796,6 +798,7 @@ function showStatusDisplay(stats) {
   flashBulbsEl.innerHTML = "";
 
   cardArtEl.src = ELEMENT_CARD_IMAGES[stats.element] || "";
+  cardArtLayerEls.forEach((el) => (el.src = cardArtEl.src));
 
   if (capturedCutoutDataUrl) {
     cardCharacterCutoutEl.src = capturedCutoutDataUrl;
