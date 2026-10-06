@@ -1,108 +1,48 @@
 using System.Collections;
 using UnityEngine;
-using UnityEngine.UI;
-using TMPro; // TextMeshProを使用。通常のUI.Textを使う場合は using UnityEngine.UI; に変更してください
+using UnityEngine.SceneManagement;
 
 /// <summary>
-/// バトルシーンの制御。
-/// シーン開始時にランダムな敵キャラクターを生成し、
-/// プレイヤーキャラクター(GameManagerに保存済み)と自動/手動を組み合わせて戦闘を行う。
+/// バトルシーンの進行役。
 ///
-/// 【今回の変更点：バトルアルゴリズムの刷新】
-/// 従来の「毎ターン自動でダメージ計算」から、
-/// 「強・普・弱の3ボタンによるじゃんけん式」に変更した。
+/// 【画面】
+/// 会場は3Dのスタジアム(Stadium)で、キャラクター(Fighter3D)がフィールドに立って戦う。
+/// カメラ(StadiumCamera)は中継のように、引き・正面・肩越し・アップを切り替える。
+/// 名前やHPなどの文字情報は、その上に重ねた2DのHUD(BattleHud)に表示する。
+/// これらはすべて実行時にコードで生成するため、シーンに置かれていた旧HUD(Canvas配下)は開始時に非表示にする。
 ///
-///   1. 攻撃側が「強/普/弱」のいずれかを選ぶ(攻撃ターン)
-///   2. 防御側が「強/普/弱」のいずれかを選ぶ(防御ターン)
-///   3. 両者が同じレベルを選んでいたら防御成功＝ノーダメージ
-///   4. 異なるレベルなら攻撃が命中し、攻撃側が選んだレベルに応じた威力でダメージが入る
-///      (強＞普＞弱の順にダメージ倍率が大きい)
+/// 【対戦ルール】(数値の計算は BattleRules に集約)
+///   1. SPDが高い方が先攻。以降、攻撃側と防御側を交互に入れ替える
+///   2. 攻撃側・防御側がそれぞれ「強/普/弱」を選ぶ(本番は両者のスマホで同時に選ぶ)
+///   3. 同じレベルなら防御成功(ノーダメージ)。違えば命中し、攻撃側のレベルに応じたダメージが入る
+///   4. カードごとの必殺技レベルで命中すると追加倍率がかかり、スキル(LifeDrain/Overdrive)も発動する
+///   5. HPが0になるか、BattleRules.MaxExchanges 回の攻防で決着しなければ残りHPの割合で判定
+///   スマホ対戦では、同じプレイヤーの時間切れが maxConsecutiveTimeouts 回続くと不戦敗になる。
+///   試合が終わると nextMatchDelaySeconds 秒後にシーンを読み込み直し、次の試合を待ち受ける。
 ///
-/// さらに、キャラクターごとに「強/普/弱」のうちどれか1つが必殺技レベルとして
-/// 決定論的に割り当てられる(同じキャラは常に同じレベルが必殺技になる)。
-/// 必殺技レベルで攻撃が命中すると、通常より大きい追加倍率がかかり、
-/// 既存のスキル効果(LifeDrain/Overdrive)もこのタイミングでのみ発動する。
+/// 【開発者用のデモ対戦】(QRコードもスマホも使わずに、PCだけで遊べる)
+///   エディタまたは開発ビルドの受付画面で F5 = CPU同士、F6 = キーボード(1=強 2=普 3=弱)対CPU。
+///   タイトル画面の開発者モードからも開始できる(PendingDemoに指定してからシーンを読み込む)。
+///   battleQueueIntake が未設定の場合も、自動的にCPU同士のデモ対戦になる。
 ///
-/// プレイヤーの番になると画面にボタンが表示され選択を待つ。
-/// 敵の番はAIが少し考える間を置いてから、必殺技レベルをやや選びやすい確率でランダムに選ぶ。
-///
-/// 【セットアップ方法】
-/// 1. Canvas上に「PlayerSpawnPoint」「EnemySpawnPoint」という空のRectTransformを2つ用意し、
-///    プレイヤー側(画面左寄り)、敵側(画面右寄り)に配置する。
-/// 2. バトル管理用の空のGameObjectを作成し、このスクリプトをアタッチ。
-/// 3. Canvas上に以下を用意してインスペクターにドラッグ：
-///    - battleLogText / winPanel / losePanel / winPanelText / losePanelText
-///    - playerNameText / enemyNameText
-///    - playerHpSlider / enemyHpSlider（Min=0, Max=1推奨）
-///    - playerHpText / enemyHpText
-///    - buttonPanel（強/普/弱ボタンをまとめた親GameObject。最初は非アクティブ推奨）
-///    - promptText（「攻撃を選べ！」等の案内テキスト）
-///    - strongButton / normalButton / weakButton（Buttonコンポーネント3つ）
-/// 4. 各ボタンのOnClick()に、このスクリプトの
-///    OnStrongButton() / OnNormalButton() / OnWeakButton() をそれぞれ登録する。
-/// 5. playerSpawnPoint / enemySpawnPoint に手順1で作成したRectTransformをドラッグ。
-/// 6. ElementAffinityクラスに GetElementColor(ElementType) が必要です。
+/// 【セットアップ】
+///   バトル管理用のGameObjectにこのスクリプトをアタッチし、battleQueueIntake / battleTurnSync を設定する。
+///   シーンには Main Camera と、オーバーレイのCanvasが1つあればよい(無ければCanvasは自動で作る)。
 /// </summary>
 public class BattleManager : MonoBehaviour
 {
-    [Header("UI参照 - ログ/結果")]
-    [SerializeField] private TextMeshProUGUI battleLogText;
-    [SerializeField] private GameObject winPanel;
-    [SerializeField] private GameObject losePanel;
-    [SerializeField] private TextMeshProUGUI winPanelText;
-    [SerializeField] private TextMeshProUGUI losePanelText;
+    public enum DemoMode { None, CpuVsCpu, PlayerVsCpu }
 
-    [Header("UI参照 - キャラクター情報")]
-    [SerializeField] private TextMeshProUGUI playerNameText;
-    [SerializeField] private TextMeshProUGUI enemyNameText;
-    [SerializeField] private Slider playerHpSlider;
-    [SerializeField] private Slider enemyHpSlider;
-    [SerializeField] private TextMeshProUGUI playerHpText;
-    [SerializeField] private TextMeshProUGUI enemyHpText;
-
-    [Header("UI参照 - 強/普/弱ボタン")]
-    [Tooltip("強/普/弱ボタンをまとめた親。プレイヤーの選択中だけ表示する")]
-    [SerializeField] private GameObject buttonPanel;
-    [Tooltip("「攻撃を選べ」「防御を選べ」などの案内テキスト")]
-    [SerializeField] private TextMeshProUGUI promptText;
-    [SerializeField] private Button strongButton;
-    [SerializeField] private Button normalButton;
-    [SerializeField] private Button weakButton;
-
-    [Header("2Dバトルステージ")]
-    [SerializeField] private RectTransform playerSpawnPoint;
-    [SerializeField] private RectTransform enemySpawnPoint;
-    [SerializeField] private float iconScale = 1f;
-    [SerializeField] private float damageNumberHeight = 110f;
-    [Tooltip("ダメージ数値などの演出用UIを生成する親(未設定ならbattleLogTextのCanvasを自動使用)")]
-    [SerializeField] private Transform effectParent;
-    [Tooltip("被弾を軽く揺らす簡易シェイク対象(バトル全体のPanelなど。未設定なら無効)")]
-    [SerializeField] private RectTransform shakeTarget;
-    [SerializeField] private float shakeStrength = 6f;
+    /// <summary>次にバトルシーンを開いた時に始めるデモ対戦(タイトルの開発者モードから指定する)。</summary>
+    public static DemoMode PendingDemo = DemoMode.None;
 
     [Header("演出設定")]
-    [Tooltip("1ターン終了後、次のターンに移るまでの間隔（秒）")]
-    [SerializeField] private float turnInterval = 0.8f;
-    [Tooltip("ログメッセージ1件あたりの表示時間（秒）")]
-    [SerializeField] private float messageInterval = 0.9f;
-    [Tooltip("HPバーが変化する際のアニメーション速度（大きいほど速い）")]
-    [SerializeField] private float hpBarLerpSpeed = 4f;
-    [Tooltip("攻撃時に突進する距離（ピクセル）")]
-    [SerializeField] private float attackLungeDistance = 80f;
-    [Tooltip("攻撃演出の所要時間（秒）")]
-    [SerializeField] private float attackLungeDuration = 0.35f;
-    [Tooltip("戦闘不能演出の所要時間（秒）")]
-    [SerializeField] private float faintDuration = 0.6f;
-    [Tooltip("被弾時のフラッシュ色")]
-    [SerializeField] private Color hitFlashColor = new Color(1f, 0.4f, 0.4f, 1f);
-    [Tooltip("被弾時に弾かれるノックバック距離（ピクセル）")]
-    [SerializeField] private float hitKnockbackDistance = 24f;
-    [Tooltip("命中時に表示する衝撃波エフェクトの最大サイズ（ピクセル）")]
-    [SerializeField] private float impactBurstSize = 130f;
-    [Tooltip("防御成功時のパルス演出の所要時間（秒）")]
-    [SerializeField] private float guardPulseDuration = 0.3f;
-    [Tooltip("敵AIが選択するまでの「考える時間」（秒）")]
-    [SerializeField] private float aiThinkDelay = 0.6f;
+    [Tooltip("1回の攻防が終わってから次に移るまでの間隔（秒）")]
+    [SerializeField] private float turnInterval = 0.6f;
+    [Tooltip("メッセージ1件あたりの表示時間（秒）")]
+    [SerializeField] private float messageInterval = 1.1f;
+    [Tooltip("デモ対戦でCPUが選ぶまでの「考える時間」（秒）")]
+    [SerializeField] private float aiThinkDelay = 0.8f;
 
     [Header("強さレベルごとのダメージ倍率")]
     [SerializeField] private float weakMultiplier = 0.7f;
@@ -110,402 +50,530 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private float strongMultiplier = 1.4f;
     [Tooltip("必殺技レベルが命中した際の追加倍率")]
     [SerializeField] private float specialBonusMultiplier = 1.5f;
-    [Tooltip("敵AIが必殺技レベルを選ぶ確率(0〜1)。残りは3択の均等ランダム")]
+    [Tooltip("CPUが必殺技レベルを選ぶ確率(0〜1)。残りは3択の均等ランダム")]
     [Range(0f, 1f)]
     [SerializeField] private float aiSpecialBias = 0.4f;
 
-    [Header("対戦キュー(スマホ側の登録待ち・任意)")]
-    [Tooltip("設定すると、バトル開始前に「スマホ側で2台分の対戦登録(battleSlots)が揃うのを待つ」" +
-             "フェーズが入り、2人分のステータス・スキル・実物写真がそのままプレイヤー1/2になる。" +
-             "PC側でQRコードを読み取ることはない(スマホ側で完結する設計)。" +
-             "未設定の場合は従来通りGameManagerに保存済みのキャラクター(無ければ自動生成)対ランダム敵で動作する。")]
-    [SerializeField] private BattleQueueIntake battleQueueIntake;
+    [Header("試合の運営")]
+    [Tooltip("試合終了から次の試合の受付に戻るまでの秒数")]
+    [SerializeField] private float nextMatchDelaySeconds = 12f;
+    [Tooltip("同じプレイヤーの時間切れがこの回数続いたら不戦敗にする")]
+    [SerializeField] private int maxConsecutiveTimeouts = 2;
+    [Tooltip("試合を中断して次の試合の受付に戻すキー(運営者用)")]
+    [SerializeField] private KeyCode abortKey = KeyCode.R;
+    [Tooltip("キーボード対CPUのデモ対戦で、プレイヤーが選ぶ制限時間（秒）")]
+    [SerializeField] private float keyboardChoiceSeconds = 20f;
 
-    [Tooltip("設定すると、各ターンの「強/普/弱」選択をPCのボタンではなくスマホ側からFirebase経由で" +
-             "受け取るようになる(本番の2台対戦モード用)。battleQueueIntakeとセットで使う。" +
-             "未設定の場合は従来通りPC画面のボタン(プレイヤー)+AI(敵)で動作する。")]
+    [Header("対戦キュー(スマホ側の登録待ち)")]
+    [Tooltip("スマホ側で2台分の対戦登録(battleSlots)が揃うのを待つ。未設定ならCPU同士のデモ対戦になる。")]
+    [SerializeField] private BattleQueueIntake battleQueueIntake;
+    [Tooltip("各ターンの「強/普/弱」をスマホからFirebase経由で受け取る(本番の2台対戦モード)。")]
     [SerializeField] private BattleTurnSync battleTurnSync;
 
-    private CharacterStats player;
-    private CharacterStats enemy;
+    private static readonly string[] DemoNames = { "ホムラドラゴン", "ミナモスライム", "カゼキリ", "ツチノコ丸", "ヒカリウサギ", "ヤミネコ" };
 
-    private GameObject playerIcon;
-    private GameObject enemyIcon;
-    private MonsterVisual2D playerVisual;
-    private MonsterVisual2D enemyVisual;
+    private CharacterStats player1;
+    private CharacterStats player2;
+    private Fighter3D fighter1;
+    private Fighter3D fighter2;
+    private Stadium stadium;
+    private StadiumCamera stadiumCamera;
+    private BattleHud hud;
 
-    private AttackLevel playerSelectedLevel;
-    private bool playerHasSelected;
+    private DemoMode demoMode = DemoMode.None;
+    private bool matchStarted;
+    private bool isReloading;
+    private int player1ConsecutiveTimeouts;
+    private int player2ConsecutiveTimeouts;
+    private string forfeitSlot; // 不戦敗になった側("player1" / "player2")。なければnull
+
+    // キーボード入力(デモ対戦)
+    private bool awaitingKeyboard;
+    private AttackLevel? keyboardChoice;
+
+    private static bool DeveloperFeaturesAllowed => Application.isEditor || Debug.isDebugBuild;
+    private bool IsPhoneMatch => demoMode == DemoMode.None && battleTurnSync != null;
+
+    // ==================== 起動と受付 ====================
 
     private void Start()
     {
-        if (GameManager.Instance == null)
+        Camera mainCamera = Camera.main;
+        if (mainCamera == null)
         {
-            Debug.LogError("GameManagerが見つかりません。タイトルシーンにGameManagerを配置してください。");
+            mainCamera = new GameObject("Main Camera").AddComponent<Camera>();
+            mainCamera.tag = "MainCamera";
+        }
+        stadium = Stadium.Build(mainCamera);
+        stadiumCamera = mainCamera.GetComponent<StadiumCamera>();
+        if (stadiumCamera == null) stadiumCamera = mainCamera.gameObject.AddComponent<StadiumCamera>();
+        stadiumCamera.Orbit(Vector3.up * 2f, 34f, 12f, 4f, 42f, -90f, true);
+
+        hud = BattleHud.Create(PrepareCanvas());
+        stadium.SetScreens("ORISAMO", "対戦受付中");
+        hud.ShowWaiting(FirebaseRest.TableId,
+            DeveloperFeaturesAllowed ? "開発者用:  F5 = CPU同士のデモ対戦　／　F6 = キーボードで対戦（1=強 2=普 3=弱）" : null);
+
+        if (PendingDemo != DemoMode.None)
+        {
+            DemoMode requested = PendingDemo;
+            PendingDemo = DemoMode.None;
+            StartDemo(requested);
             return;
         }
 
-        if (battleQueueIntake != null)
+        if (battleQueueIntake == null)
         {
-            // スマホ側で2台分の対戦登録(battleSlots)が揃うまで待機する。
-            // 揃ったらHandleMatchReady経由でBeginBattle()が呼ばれる。
-            battleQueueIntake.OnMatchReady += HandleMatchReady;
+            StartDemo(DemoMode.CpuVsCpu);
             return;
         }
 
-        // フォールバック(スマホでの対戦キューを使わない単体テスト用): 従来通り
-        // GameManager保存済みキャラクター(無ければ自動生成)対ランダム生成の敵、で開始する。
-        player = ResolveFallbackPlayer();
-        enemy = new CharacterStats("敵キャラクター");
-        enemy.AssignRandomStats();
-        BeginBattle();
+        battleQueueIntake.OnSlotsChanged += HandleSlotsChanged;
+        battleQueueIntake.OnMatchReady += HandleMatchReady;
     }
 
     private void OnDestroy()
     {
         if (battleQueueIntake != null)
         {
+            battleQueueIntake.OnSlotsChanged -= HandleSlotsChanged;
             battleQueueIntake.OnMatchReady -= HandleMatchReady;
         }
     }
 
     /// <summary>
-    /// 対戦キューを使わない場合のプレイヤーキャラクター解決(フォールバック用)。
-    /// GameManagerに保存済みのキャラクターがあればそれを、無ければ従来通りランダム生成する。
+    /// HUDを置くCanvasを用意する。シーンに置かれていた旧HUD(Canvas配下の要素)はすべて非表示にする。
     /// </summary>
-    private CharacterStats ResolveFallbackPlayer()
+    private static Canvas PrepareCanvas()
     {
-        if (GameManager.Instance.HasPlayerCharacter())
+        foreach (Canvas candidate in FindObjectsByType<Canvas>(FindObjectsSortMode.None))
         {
-            return GameManager.Instance.PlayerCharacter;
+            if (!candidate.isRootCanvas || candidate.renderMode != RenderMode.ScreenSpaceOverlay) continue;
+            foreach (Transform child in candidate.transform) child.gameObject.SetActive(false);
+            return candidate;
         }
 
-        CharacterStats fallback = new CharacterStats("プレイヤー");
-        fallback.AssignRandomStats();
-        GameManager.Instance.SavePlayerCharacter(fallback);
-        Debug.Log("キャラクター未作成だったため、ランダムキャラクターを自動生成しました。");
-        return fallback;
+        GameObject go = new GameObject("Canvas", typeof(Canvas), typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
+        Canvas canvas = go.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        return canvas;
     }
 
-    /// <summary>
-    /// BattleQueueIntakeがbattleSlotsの2枠(スマホ側で登録済みの2人)を読み込み終えた時に呼ばれる。
-    /// どちらも実在プレイヤーの実物写真つきキャラクターであり、片方をAIで自動生成することはない。
-    /// </summary>
-    private void HandleMatchReady(CharacterStats player1, CharacterStats player2)
+    private void HandleSlotsChanged(bool player1Joined, string player1Name, bool player2Joined, string player2Name)
     {
+        if (!matchStarted) hud.SetSlots(player1Joined, player1Name, player2Joined, player2Name);
+    }
+
+    /// <summary>スマホ側で2人の登録が揃った(BattleQueueIntakeがactiveBattleを初期化済み)。</summary>
+    private void HandleMatchReady(BattleQueueIntake.MatchInfo match)
+    {
+        if (matchStarted) return;
         battleQueueIntake.OnMatchReady -= HandleMatchReady;
-
-        player = player1;
-        enemy = player2;
-
-        BeginBattle();
+        hud.SetSlots(true, match.player1.characterName, true, match.player2.characterName);
+        if (battleTurnSync != null) battleTurnSync.BeginMatch();
+        BeginMatch(match.player1, match.player2);
     }
 
-    /// <summary>
-    /// player・enemyが確定した後の共通初期化処理(アイコン生成〜バトル開始)。
-    /// </summary>
-    private void BeginBattle()
+    /// <summary>開発者用: QRコードもスマホも使わずに、PCだけでデモ対戦を始める。</summary>
+    private void StartDemo(DemoMode mode)
     {
-        SpawnIcons();
-        SetupCharacterDisplay();
-        SetupButtons();
+        if (matchStarted) return;
+        if (battleQueueIntake != null) battleQueueIntake.StopWaiting();
+        demoMode = mode;
 
-        if (buttonPanel != null) buttonPanel.SetActive(false);
-
-        StartCoroutine(RunBattle());
+        int first = Random.Range(0, DemoNames.Length);
+        int second = (first + Random.Range(1, DemoNames.Length)) % DemoNames.Length;
+        CharacterStats a = new CharacterStats(mode == DemoMode.PlayerVsCpu ? "あなた・" + DemoNames[first] : DemoNames[first]);
+        a.AssignRandomStats();
+        CharacterStats b = new CharacterStats("CPU・" + DemoNames[second]);
+        b.AssignRandomStats();
+        hud.SetSlots(true, a.characterName, true, b.characterName);
+        BeginMatch(a, b);
     }
 
-    private void SpawnIcons()
+    private void Update()
     {
-        if (playerSpawnPoint == null || enemySpawnPoint == null)
+        if (Input.GetKeyDown(abortKey) && matchStarted)
         {
-            Debug.LogError("playerSpawnPoint / enemySpawnPoint が設定されていません。");
-            return;
+            Debug.Log("BattleManager: 運営者の操作で試合を中断し、受付に戻ります。");
+            ReloadForNextMatch();
         }
 
-        playerIcon = MonsterSpriteBuilder.Build(player, playerSpawnPoint, iconScale);
-        enemyIcon = MonsterSpriteBuilder.Build(enemy, enemySpawnPoint, iconScale);
-
-        playerVisual = playerIcon.GetComponent<MonsterVisual2D>();
-        enemyVisual = enemyIcon.GetComponent<MonsterVisual2D>();
-
-        playerVisual.StartIdle();
-        enemyVisual.StartIdle();
-    }
-
-    private void SetupCharacterDisplay()
-    {
-        if (playerNameText != null) playerNameText.text = player.characterName;
-        if (enemyNameText != null) enemyNameText.text = enemy.characterName;
-
-        SetupHpSlider(playerHpSlider, player.element);
-        SetupHpSlider(enemyHpSlider, enemy.element);
-
-        UpdateHpText(playerHpText, player);
-        UpdateHpText(enemyHpText, enemy);
-    }
-
-    private void SetupHpSlider(Slider slider, ElementType element)
-    {
-        if (slider == null) return;
-        slider.minValue = 0f;
-        slider.maxValue = 1f;
-        slider.value = 1f;
-
-        if (slider.fillRect != null)
+        if (!matchStarted && DeveloperFeaturesAllowed)
         {
-            Image fillImage = slider.fillRect.GetComponent<Image>();
-            if (fillImage != null) fillImage.color = ElementAffinity.GetElementColor(element);
+            if (Input.GetKeyDown(KeyCode.F5)) StartDemo(DemoMode.CpuVsCpu);
+            else if (Input.GetKeyDown(KeyCode.F6)) StartDemo(DemoMode.PlayerVsCpu);
+        }
+
+        if (awaitingKeyboard)
+        {
+            if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1)) keyboardChoice = AttackLevel.Strong;
+            else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2)) keyboardChoice = AttackLevel.Normal;
+            else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3)) keyboardChoice = AttackLevel.Weak;
         }
     }
 
-    private void SetupButtons()
+    /// <summary>シーンを読み込み直して次の試合を待ち受ける。進行中の試合はスマホ側に中断として伝わる。</summary>
+    private void ReloadForNextMatch()
     {
-        if (strongButton != null) strongButton.onClick.AddListener(OnStrongButton);
-        if (normalButton != null) normalButton.onClick.AddListener(OnNormalButton);
-        if (weakButton != null) weakButton.onClick.AddListener(OnWeakButton);
+        if (isReloading) return;
+        isReloading = true;
+        if (battleTurnSync != null) battleTurnSync.AbortIfInProgress();
+        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
-    // ボタンのOnClick()から呼び出す想定の公開メソッド
-    public void OnStrongButton() => SelectLevel(AttackLevel.Strong);
-    public void OnNormalButton() => SelectLevel(AttackLevel.Normal);
-    public void OnWeakButton() => SelectLevel(AttackLevel.Weak);
+    // ==================== 試合の進行 ====================
 
-    private void SelectLevel(AttackLevel level)
+    private void BeginMatch(CharacterStats first, CharacterStats second)
     {
-        playerSelectedLevel = level;
-        playerHasSelected = true;
+        matchStarted = true;
+        player1 = first;
+        player2 = second;
+        StartCoroutine(RunMatch());
     }
 
-    /// <summary>
-    /// 自動戦闘のメインループ。
-    /// 素早さが高い方が先制攻撃し、以降交互に「攻撃側⇔防御側」を入れ替えながら戦闘を行う。
-    /// HPが0以下になった方が敗北。
-    /// </summary>
+    private IEnumerator RunMatch()
+    {
+        yield return new WaitForSeconds(0.8f); // 受付画面で「参加完了」を見せる間
+        hud.HideWaiting();
+        stadium.SetScreens($"{player1.characterName}  VS  {player2.characterName}", "BATTLE");
+
+        fighter1 = Fighter3D.Create(player1, stadium.Player1Spot, true, stadium.transform);
+        fighter2 = Fighter3D.Create(player2, stadium.Player2Spot, false, stadium.transform);
+
+        // 入場: 引きの画 → それぞれのアップで光の柱とともに登場 → 中継アングル
+        stadiumCamera.Wide(1.2f);
+        stadium.Cheer(0.6f);
+        yield return new WaitForSeconds(1f);
+        yield return Entrance(fighter1, -0.7f);
+        yield return Entrance(fighter2, 0.7f);
+
+        stadiumCamera.Broadcast(1.1f);
+        hud.ShowBattle(player1, player2);
+        yield return hud.PlayIntro(player1, player2);
+        yield return RunBattle();
+    }
+
+    private IEnumerator Entrance(Fighter3D fighter, float side)
+    {
+        stadiumCamera.CloseUp(fighter.Home, fighter.Height, 0.8f, false, side);
+        yield return new WaitForSeconds(0.55f);
+        yield return fighter.PlayEntrance();
+        stadium.FlashLed(ElementAffinity.GetElementColor(fighter.Stats.element), 1.6f);
+        stadium.Cheer(0.8f);
+        yield return new WaitForSeconds(0.6f);
+    }
+
     private IEnumerator RunBattle()
     {
-        yield return StartCoroutine(ShowMessage("戦闘開始！"));
+        bool player1First = BattleRules.Player1AttacksFirst(player1.speed, player2.speed, Random.value);
+        CharacterStats first = player1First ? player1 : player2;
+        CharacterStats second = player1First ? player2 : player1;
+        yield return ShowMessage($"素早さで勝る {first.characterName} の先攻！");
 
-        CharacterStats first = player.speed >= enemy.speed ? player : enemy;
-        CharacterStats second = player.speed >= enemy.speed ? enemy : player;
-
-        while (player.hp > 0 && enemy.hp > 0)
+        int exchanges = 0;
+        while (player1.hp > 0 && player2.hp > 0 && forfeitSlot == null && exchanges < BattleRules.MaxExchanges)
         {
-            yield return StartCoroutine(ExecuteAttack(first, second));
-            if (second.hp <= 0) break;
-
-            yield return StartCoroutine(ExecuteAttack(second, first));
+            CharacterStats attacker = exchanges % 2 == 0 ? first : second;
+            CharacterStats defender = attacker == first ? second : first;
+            hud.SetTurn(exchanges + 1);
+            yield return ExecuteAttack(attacker, defender);
+            if (isReloading) yield break;
+            exchanges++;
         }
 
-        if (battleTurnSync != null)
+        // 勝敗と決着の理由
+        string winnerSlot;
+        string endReason;
+        if (forfeitSlot != null)
         {
-            string winnerSlot = player.hp > 0 ? "player1" : "player2";
-            yield return StartCoroutine(battleTurnSync.WriteFinished(winnerSlot));
+            winnerSlot = forfeitSlot == "player1" ? "player2" : "player1";
+            endReason = "forfeit";
+        }
+        else if (player1.hp <= 0 || player2.hp <= 0)
+        {
+            winnerSlot = player1.hp > 0 ? "player1" : "player2";
+            endReason = "knockout";
+        }
+        else
+        {
+            int judged = BattleRules.JudgeByHpRatio(player1.hp, player1.maxHp, player2.hp, player2.maxHp);
+            winnerSlot = judged == 1 ? "player1" : judged == 2 ? "player2" : "draw";
+            endReason = "judgement";
+            yield return ShowMessage($"{BattleRules.MaxExchanges}回の攻防で決着がつかなかった！残りHPで判定します");
         }
 
-        ShowResult();
+        if (IsPhoneMatch) yield return battleTurnSync.WriteFinished(winnerSlot, endReason);
+        yield return ShowResult(winnerSlot, endReason);
     }
 
-    /// <summary>
-    /// 1回分の攻防処理。
-    /// 攻撃側の選択→防御側の選択→一致判定→(命中時のみ)ダメージ演出、の順で行う。
-    /// </summary>
+    /// <summary>1回分の攻防: 両者の選択 → 同時公開 → 防御成功 or 命中の演出。</summary>
     private IEnumerator ExecuteAttack(CharacterStats attacker, CharacterStats defender)
     {
-        bool attackerIsPlayer = attacker == player;
-        bool defenderIsPlayer = defender == player;
+        bool attackerIsPlayer1 = attacker == player1;
+        Fighter3D attackerFighter = attackerIsPlayer1 ? fighter1 : fighter2;
+        Fighter3D defenderFighter = attackerIsPlayer1 ? fighter2 : fighter1;
 
-        MonsterVisual2D attackerVisual = attackerIsPlayer ? playerVisual : enemyVisual;
-        MonsterVisual2D defenderVisual = attackerIsPlayer ? enemyVisual : playerVisual;
+        stadiumCamera.Broadcast(0.9f);
+        attackerFighter.SetRoleColor(OrisamoUI.AttackColor);
+        defenderFighter.SetRoleColor(OrisamoUI.DefenseColor);
+        SetRoles(attackerIsPlayer1, false, false);
 
         AttackLevel attackLevel = AttackLevel.Normal;
         AttackLevel defenseLevel = AttackLevel.Normal;
 
-        if (battleTurnSync != null)
+        if (IsPhoneMatch)
         {
-            // 本番の2台対戦モード: 攻撃側・防御側ともスマホ側で同時に選択する(PCは表示のみ)
-            string attackerSlot = attackerIsPlayer ? "player1" : "player2";
-            string defenderSlot = defenderIsPlayer ? "player1" : "player2";
+            hud.SetMessage($"{attacker.characterName} の攻撃！　スマホで「強・普・弱」を選んでください");
+            string attackerSlot = attackerIsPlayer1 ? "player1" : "player2";
+            string defenderSlot = attackerIsPlayer1 ? "player2" : "player1";
+            BattleTurnSync.TurnChoices choices = default;
+            bool resolved = false;
+            StartCoroutine(battleTurnSync.WaitForChoices(attackerSlot, defenderSlot, c => { choices = c; resolved = true; }));
+            while (!resolved)
+            {
+                if (battleTurnSync.IsWaitingForChoices)
+                {
+                    hud.SetCountdown(battleTurnSync.SecondsRemaining, battleTurnSync.ChoiceTimeoutSeconds);
+                    SetRoles(attackerIsPlayer1, battleTurnSync.AttackerChosen, battleTurnSync.DefenderChosen);
+                }
+                yield return null;
+            }
+            hud.SetCountdown(-1f, 0f);
+            attackLevel = choices.attacker;
+            defenseLevel = choices.defender;
 
-            yield return StartCoroutine(battleTurnSync.WaitForChoices(attackerSlot, defenderSlot,
-                (a, d) => { attackLevel = a; defenseLevel = d; }));
+            // 時間切れの記録と不戦敗の判定
+            bool player1TimedOut = attackerIsPlayer1 ? choices.attackerTimedOut : choices.defenderTimedOut;
+            bool player2TimedOut = attackerIsPlayer1 ? choices.defenderTimedOut : choices.attackerTimedOut;
+            player1ConsecutiveTimeouts = player1TimedOut ? player1ConsecutiveTimeouts + 1 : 0;
+            player2ConsecutiveTimeouts = player2TimedOut ? player2ConsecutiveTimeouts + 1 : 0;
+            bool player1Out = player1ConsecutiveTimeouts >= maxConsecutiveTimeouts;
+            bool player2Out = player2ConsecutiveTimeouts >= maxConsecutiveTimeouts;
 
-            yield return StartCoroutine(ShowMessage($"{attacker.characterName}が攻撃を仕掛けてきた！"));
+            if (player1Out && player2Out)
+            {
+                yield return ShowMessage("両プレイヤーの応答がないため、試合を中断します");
+                ReloadForNextMatch();
+                yield break;
+            }
+            if (player1Out || player2Out)
+            {
+                forfeitSlot = player1Out ? "player1" : "player2";
+                CharacterStats absent = player1Out ? player1 : player2;
+                ClearRoles();
+                yield return ShowMessage($"{absent.characterName} の応答がないため、不戦敗とします");
+                yield break;
+            }
+            if (choices.attackerTimedOut || choices.defenderTimedOut)
+            {
+                yield return ShowMessage("時間切れ！選ばなかった側は「普」になります");
+            }
         }
         else
         {
-            // フォールバック(スマホ対戦キューを使わない単体テスト用): PCボタン(プレイヤー)+AI(敵)
-            // ① 攻撃側の選択(内容はまだ公開しない)
-            if (attackerIsPlayer)
-            {
-                yield return StartCoroutine(WaitForPlayerChoice($"{attacker.characterName}の番！攻撃の強さを選んでください"));
-                attackLevel = playerSelectedLevel;
-            }
-            else
-            {
-                yield return new WaitForSeconds(aiThinkDelay);
-                attackLevel = ChooseAiLevel(attacker, aiSpecialBias);
-            }
-            yield return StartCoroutine(ShowMessage($"{attacker.characterName}が攻撃を仕掛けてきた！"));
+            hud.SetMessage($"{attacker.characterName} の攻撃！");
+            bool attackerIsHuman = demoMode == DemoMode.PlayerVsCpu && attackerIsPlayer1;
+            bool defenderIsHuman = demoMode == DemoMode.PlayerVsCpu && !attackerIsPlayer1;
+            AttackLevel chosen = AttackLevel.Normal;
 
-            // ② 防御側の選択(攻撃側が何を選んだかは分からないまま選ぶ)
-            if (defenderIsPlayer)
-            {
-                yield return StartCoroutine(WaitForPlayerChoice($"{defender.characterName}の番！防御の強さを選んでください"));
-                defenseLevel = playerSelectedLevel;
-            }
-            else
-            {
-                yield return new WaitForSeconds(aiThinkDelay);
-                defenseLevel = ChooseAiLevel(defender, 0f); // 防御は必殺技バイアスなしの均等ランダム
-            }
+            if (attackerIsHuman) yield return WaitForKeyboard("攻撃", attackerIsPlayer1, level => chosen = level);
+            else yield return new WaitForSeconds(aiThinkDelay * Random.Range(0.7f, 1.6f));
+            attackLevel = attackerIsHuman ? chosen : ChooseAiLevel(attacker, aiSpecialBias);
+            SetRoles(attackerIsPlayer1, true, false);
+
+            if (defenderIsHuman) yield return WaitForKeyboard("防御", !attackerIsPlayer1, level => chosen = level);
+            else yield return new WaitForSeconds(aiThinkDelay * Random.Range(0.7f, 1.6f));
+            defenseLevel = defenderIsHuman ? chosen : ChooseAiLevel(defender, 0f);
+            SetRoles(attackerIsPlayer1, true, true);
+            yield return new WaitForSeconds(0.3f);
         }
 
-        // ③ 両者の選択を同時に公開
-        yield return StartCoroutine(ShowMessage(
-            $"{attacker.characterName}は「{LevelLabel(attackLevel)}」で攻撃！ {defender.characterName}は「{LevelLabel(defenseLevel)}」で防御！"));
+        // 両者の選択を同時に公開
+        bool guarded = attackLevel == defenseLevel;
+        yield return hud.PlayReveal(attackLevel, defenseLevel, attackerIsPlayer1, guarded);
+        ClearRoles();
 
-        // ③ 一致判定
-        if (attackLevel == defenseLevel)
+        if (guarded)
         {
-            if (defenderVisual != null)
+            stadiumCamera.OverShoulder(attackerFighter.Home, defenderFighter.Home);
+            yield return new WaitForSeconds(0.35f);
+            yield return attackerFighter.PlayLunge(defenderFighter.Home, () =>
             {
-                StartCoroutine(defenderVisual.PlayGuardPulse(guardPulseDuration));
-            }
-            yield return StartCoroutine(ShowMessage($"{defender.characterName}は攻撃を防いだ！"));
+                StartCoroutine(defenderFighter.PlayGuard());
+                StadiumKit.Shockwave(defenderFighter.Home, OrisamoUI.DefenseColor, 5f);
+                stadiumCamera.Shake(0.25f);
+                stadium.Cheer(0.5f);
+            });
+            stadiumCamera.Broadcast(0.8f);
+            yield return ShowMessage($"{defender.characterName} は攻撃を見切って防いだ！");
+            ResetRoleColors();
             yield return new WaitForSeconds(turnInterval);
             yield break;
         }
 
-        // ④ 命中：ダメージ計算
+        // 命中: ダメージ計算
         int damage = CalculateDamage(attacker, defender, attackLevel, out float elementMultiplier, out bool isSpecial);
-        defender.hp -= damage;
+        Color attackColor = ElementAffinity.GetElementColor(attacker.element);
+        bool heavy = isSpecial || elementMultiplier > 1f;
 
         if (isSpecial)
         {
             string skillName = attacker.skill != null ? attacker.skill.skillName : "必殺技";
-            yield return StartCoroutine(ShowMessage($"{attacker.characterName}の必殺「{skillName}」が炸裂！"));
+            stadiumCamera.CloseUp(attackerFighter.Home, attackerFighter.Height, 0.5f, false, attackerIsPlayer1 ? -0.6f : 0.6f);
+            stadium.FlashLed(attackColor, 2.5f);
+            stadium.Cheer(0.9f);
+            StartCoroutine(hud.PlayBanner($"必殺「{skillName}」", $"{attacker.characterName} の「{OrisamoUI.LevelKanji(attackLevel)}」が炸裂！", attackColor));
+            yield return attackerFighter.PlaySpecialCharge();
+            yield return new WaitForSeconds(0.5f);
         }
 
-        // 突進演出
-        if (attackerVisual != null)
+        stadiumCamera.OverShoulder(attackerFighter.Home, defenderFighter.Home);
+        yield return new WaitForSeconds(0.35f);
+        yield return attackerFighter.PlayLunge(defenderFighter.Home, () =>
         {
-            yield return StartCoroutine(attackerVisual.PlayAttackLunge(attackerIsPlayer, attackLungeDistance, attackLungeDuration));
-        }
-
-        // 被弾フラッシュ・ノックバック・衝撃波・ダメージ数値・シェイク・HPバー
-        if (defenderVisual != null)
-        {
-            bool knockAwayRight = !defenderIsPlayer; // 敵(画面右側)は右へ、プレイヤー(画面左側)は左へ弾かれる
-            StartCoroutine(defenderVisual.PlayHitFlash(hitFlashColor, 0.25f, hitKnockbackDistance, knockAwayRight));
-            defenderVisual.SpawnImpactBurst(DamageColorFor(elementMultiplier), ResolveEffectParent(), impactBurstSize);
-            defenderVisual.SpawnDamageNumber(damage, DamageColorFor(elementMultiplier), ResolveEffectParent(), damageNumberHeight);
-        }
-        if (shakeTarget != null)
-        {
-            StartCoroutine(ShakeUI(0.15f));
-        }
-        StartCoroutine(AnimateHpBar(defenderIsPlayer ? playerHpSlider : enemyHpSlider, defender));
-
-        yield return StartCoroutine(ShowMessage(
-            $"{defender.characterName}に{damage}ダメージ！（残りHP:{Mathf.Max(defender.hp, 0)}）"));
+            defender.hp -= damage;
+            hud.SetHp(!attackerIsPlayer1, defender.hp, defender.maxHp);
+            StartCoroutine(defenderFighter.PlayHit(attackerFighter.Home, heavy));
+            StadiumKit.Burst(defenderFighter.ChestPoint, attackColor, heavy ? 90 : 45, heavy ? 13f : 9f);
+            StadiumKit.Shockwave(defenderFighter.Home, attackColor, heavy ? 10f : 6f);
+            stadiumCamera.Shake(heavy ? 1.1f : 0.55f);
+            hud.SpawnDamageNumber(defenderFighter.HeadPoint, damage, DamageColorFor(elementMultiplier), heavy);
+            stadium.Cheer(heavy ? 1f : 0.6f);
+        });
+        yield return new WaitForSeconds(0.25f);
+        stadiumCamera.Broadcast(0.9f);
 
         string effectLabel = ElementAffinity.GetMultiplierLabel(elementMultiplier);
         if (!string.IsNullOrEmpty(effectLabel))
         {
-            yield return StartCoroutine(ShowMessage(effectLabel));
+            hud.Callout(effectLabel, elementMultiplier > 1f ? new Color(1f, 0.6f, 0.3f) : OrisamoUI.Muted);
         }
+        yield return ShowMessage($"{defender.characterName} に {damage} ダメージ！");
 
-        // ⑤ 生命吸収スキル：必殺技命中時のみ発動
+        // 生命吸収スキル: 必殺技命中時のみ発動
         if (isSpecial && attacker.skill != null && attacker.skill.skillType == SkillType.LifeDrain)
         {
             int healAmount = Mathf.RoundToInt(damage * attacker.skill.ratio);
             attacker.hp = Mathf.Min(attacker.maxHp, attacker.hp + healAmount);
-
-            StartCoroutine(AnimateHpBar(attackerIsPlayer ? playerHpSlider : enemyHpSlider, attacker));
-
-            yield return StartCoroutine(ShowMessage(
-                $"{attacker.characterName}は{healAmount}回復した！（現在HP:{attacker.hp}）"));
+            hud.SetHp(attackerIsPlayer1, attacker.hp, attacker.maxHp);
+            StadiumKit.Burst(attackerFighter.ChestPoint, new Color(0.4f, 1f, 0.5f), 40, 5f);
+            yield return ShowMessage($"{attacker.characterName} は {healAmount} 回復した！");
         }
 
-        // ⑥ 戦闘不能
-        if (defender.hp <= 0 && defenderVisual != null)
+        // 戦闘不能
+        if (defender.hp <= 0)
         {
-            yield return StartCoroutine(defenderVisual.PlayFaint(faintDuration));
-            yield return StartCoroutine(ShowMessage($"{defender.characterName}は倒れた！"));
+            stadiumCamera.CloseUp(defenderFighter.Home, defenderFighter.Height, 0.5f);
+            yield return new WaitForSeconds(0.3f);
+            stadium.Cheer(1f);
+            yield return defenderFighter.PlayFaint();
+            yield return ShowMessage($"{defender.characterName} は倒れた！");
         }
 
+        ResetRoleColors();
         yield return new WaitForSeconds(turnInterval);
     }
 
-    /// <summary>
-    /// プレイヤーがボタンを押すまで待機する。押されたらボタンパネルを隠す。
-    /// </summary>
-    private IEnumerator WaitForPlayerChoice(string prompt)
+    private IEnumerator ShowResult(string winnerSlot, string endReason)
     {
-        playerHasSelected = false;
-        if (promptText != null) promptText.text = prompt;
-        else SetLog(prompt); // promptText未設定時はbattleLogTextに案内文を出す
-        if (buttonPanel != null) buttonPanel.SetActive(true);
+        bool draw = winnerSlot == "draw";
+        bool winnerIsPlayer1 = winnerSlot == "player1";
+        CharacterStats winner = draw ? null : winnerIsPlayer1 ? player1 : player2;
+        Fighter3D winnerFighter = draw ? null : winnerIsPlayer1 ? fighter1 : fighter2;
+        string reasonText = endReason == "judgement" ? "残りHPによる判定"
+            : endReason == "forfeit" ? "相手の応答なしによる不戦勝"
+            : "ノックアウト";
 
-        yield return new WaitUntil(() => playerHasSelected);
+        ResetRoleColors();
+        stadium.SetScreens(draw ? "DRAW" : $"WINNER  {winner.characterName}", reasonText);
+        stadium.FlashLed(OrisamoUI.Gold, 8f);
+        stadium.Cheer(1f);
 
-        if (buttonPanel != null) buttonPanel.SetActive(false);
-    }
-
-    /// <summary>
-    /// 敵AIがレベルを選択する。specialBiasの確率で必殺技レベルを狙い、
-    /// それ以外は3択の均等ランダムで選ぶ。
-    /// </summary>
-    private AttackLevel ChooseAiLevel(CharacterStats character, float specialBias)
-    {
-        if (specialBias > 0f && Random.value < specialBias)
+        if (winnerFighter != null)
         {
-            return GetSpecialLevel(character);
+            stadiumCamera.Orbit(winnerFighter.Home + Vector3.up * (winnerFighter.Height * 0.5f), 9f, 2.4f, 12f, 36f, -90f);
+            StartCoroutine(winnerFighter.PlayVictory());
+            StadiumKit.Confetti(winnerFighter.Home + Vector3.up * 12f, 9f);
+        }
+        else
+        {
+            stadiumCamera.Wide();
         }
 
-        int roll = Random.Range(0, 3);
-        return (AttackLevel)roll;
+        yield return hud.PlayBanner(draw ? "DRAW" : "決着！", reasonText, OrisamoUI.Gold, 0.7f);
+        hud.ShowResult(winner, winnerIsPlayer1, reasonText);
+
+        for (int seconds = Mathf.CeilToInt(nextMatchDelaySeconds); seconds > 0; seconds--)
+        {
+            hud.SetResultCountdown(seconds);
+            yield return new WaitForSeconds(1f);
+        }
+        ReloadForNextMatch();
     }
 
-    /// <summary>
-    /// キャラクターの必殺技レベルを決定論的に算出する(名前+属性のハッシュから固定)。
-    /// 同じキャラクターは常に同じレベルが必殺技になる。
-    /// </summary>
-    private AttackLevel GetSpecialLevel(CharacterStats character)
+    // ==================== 選択まわり ====================
+
+    /// <summary>キーボードで「強/普/弱」を選ぶ(デモ対戦のプレイヤー側)。制限時間を過ぎたら「普」。</summary>
+    private IEnumerator WaitForKeyboard(string role, bool isPlayer1, System.Action<AttackLevel> onChosen)
     {
-        int hash = (character.characterName + character.element).GetHashCode();
-        int mod = ((hash % 3) + 3) % 3; // 負の剰余を避ける
-        return (AttackLevel)mod;
+        hud.SetMessage($"{role}の強さをキーボードで選んでください　　1 = 強　　2 = 普　　3 = 弱");
+        keyboardChoice = null;
+        awaitingKeyboard = true;
+        float deadline = Time.time + keyboardChoiceSeconds;
+        while (keyboardChoice == null && Time.time < deadline)
+        {
+            hud.SetCountdown(deadline - Time.time, keyboardChoiceSeconds);
+            yield return null;
+        }
+        awaitingKeyboard = false;
+        hud.SetCountdown(-1f, 0f);
+        onChosen(keyboardChoice ?? AttackLevel.Normal);
     }
 
+    private void SetRoles(bool attackerIsPlayer1, bool attackerChosen, bool defenderChosen)
+    {
+        hud.SetRole(attackerIsPlayer1, "攻撃", OrisamoUI.AttackColor, attackerChosen ? "<color=#F8CF70>決定！</color>" : "選択中…");
+        hud.SetRole(!attackerIsPlayer1, "防御", OrisamoUI.DefenseColor, defenderChosen ? "<color=#F8CF70>決定！</color>" : "選択中…");
+    }
+
+    private void ClearRoles()
+    {
+        hud.SetRole(true, null, Color.clear, null);
+        hud.SetRole(false, null, Color.clear, null);
+    }
+
+    private void ResetRoleColors()
+    {
+        if (fighter1 != null) fighter1.SetRoleColor(null);
+        if (fighter2 != null) fighter2.SetRoleColor(null);
+    }
+
+    /// <summary>CPUの選択。specialBiasの確率で必殺技レベルを狙い、それ以外は3択の均等ランダム。</summary>
+    private static AttackLevel ChooseAiLevel(CharacterStats character, float specialBias)
+    {
+        if (specialBias > 0f && Random.value < specialBias) return character.specialLevel;
+        return (AttackLevel)Random.Range(0, 3);
+    }
+
+    // ==================== 計算 ====================
+
     /// <summary>
-    /// ダメージ計算：
-    /// 1. スキルによる実質攻撃力・防御力の差分をベースダメージとする（最低1保証）
-    /// 2. 属性相性による倍率を乗算
-    /// 3. 選択した強さレベル(強/普/弱)による倍率を乗算
-    /// 4. そのレベルが攻撃側の必殺技レベルと一致するなら、さらに追加倍率＋スキル加算ダメージ(Overdrive)を適用
+    /// ダメージ計算(式の本体は BattleRules.CalculateDamage):
+    /// 基礎ダメージ(スキル込みの実効ATK/DEF) → 属性倍率 → 強さ倍率 → 必殺技なら追加倍率＋Overdrive加算
     /// </summary>
     private int CalculateDamage(CharacterStats attacker, CharacterStats defender, AttackLevel level,
         out float elementMultiplier, out bool isSpecial)
     {
-        int baseDamage = attacker.GetEffectiveAttack() - defender.GetEffectiveDefense();
-        baseDamage = Mathf.Max(baseDamage, 1);
-
         elementMultiplier = ElementAffinity.GetMultiplier(attacker.element, defender.element);
-        float levelMultiplier = GetLevelMultiplier(level);
+        isSpecial = level == attacker.specialLevel;
 
-        isSpecial = level == GetSpecialLevel(attacker);
-        float specialMultiplier = isSpecial ? specialBonusMultiplier : 1f;
+        float overdriveBonus = attacker.skill != null && attacker.skill.skillType == SkillType.Overdrive
+            ? attacker.attack * attacker.skill.ratio
+            : 0f;
 
-        float finalDamage = baseDamage * elementMultiplier * levelMultiplier * specialMultiplier;
-
-        if (isSpecial && attacker.skill != null && attacker.skill.skillType == SkillType.Overdrive)
-        {
-            finalDamage += attacker.attack * attacker.skill.ratio;
-        }
-
-        return Mathf.Max(Mathf.RoundToInt(finalDamage), 1);
+        return BattleRules.CalculateDamage(attacker.GetEffectiveAttack(), defender.GetEffectiveDefense(),
+            elementMultiplier, GetLevelMultiplier(level), isSpecial, specialBonusMultiplier, overdriveBonus);
     }
 
     private float GetLevelMultiplier(AttackLevel level)
@@ -513,109 +581,21 @@ public class BattleManager : MonoBehaviour
         switch (level)
         {
             case AttackLevel.Weak: return weakMultiplier;
-            case AttackLevel.Normal: return normalMultiplier;
             case AttackLevel.Strong: return strongMultiplier;
-            default: return 1f;
+            default: return normalMultiplier;
         }
     }
 
-    private string LevelLabel(AttackLevel level)
+    private static Color DamageColorFor(float elementMultiplier)
     {
-        switch (level)
-        {
-            case AttackLevel.Weak: return "弱";
-            case AttackLevel.Normal: return "普";
-            case AttackLevel.Strong: return "強";
-            default: return "";
-        }
+        if (elementMultiplier > 1f) return new Color(1f, 0.55f, 0.25f);
+        if (elementMultiplier < 1f) return new Color(0.78f, 0.78f, 0.82f);
+        return new Color(1f, 0.97f, 0.9f);
     }
-
-    private void ShowResult()
-    {
-        bool playerWon = player.hp > 0;
-
-        if (playerWon)
-        {
-            if (winPanel != null) winPanel.SetActive(true);
-            if (winPanelText != null)
-            {
-                winPanelText.text = $"{player.characterName} の勝利！\n{player}";
-            }
-            SetLog($"{player.characterName} の勝利！");
-        }
-        else
-        {
-            if (losePanel != null) losePanel.SetActive(true);
-            if (losePanelText != null)
-            {
-                losePanelText.text = $"{enemy.characterName} の勝利…\n{enemy}";
-            }
-            SetLog($"{enemy.characterName} の勝利…");
-        }
-    }
-
-    // ==================== 表示演出まわり ====================
 
     private IEnumerator ShowMessage(string text)
     {
-        SetLog(text);
+        hud.SetMessage(text);
         yield return new WaitForSeconds(messageInterval);
-    }
-
-    private IEnumerator AnimateHpBar(Slider slider, CharacterStats target)
-    {
-        if (slider == null) yield break;
-
-        float targetValue = target.maxHp > 0
-            ? Mathf.Clamp01((float)Mathf.Max(target.hp, 0) / target.maxHp)
-            : 0f;
-
-        while (Mathf.Abs(slider.value - targetValue) > 0.001f)
-        {
-            slider.value = Mathf.Lerp(slider.value, targetValue, Time.deltaTime * hpBarLerpSpeed);
-            yield return null;
-        }
-        slider.value = targetValue;
-
-        UpdateHpText(target == player ? playerHpText : enemyHpText, target);
-    }
-
-    private void UpdateHpText(TextMeshProUGUI text, CharacterStats stats)
-    {
-        if (text == null) return;
-        text.text = $"{Mathf.Max(stats.hp, 0)} / {stats.maxHp}";
-    }
-
-    private Color DamageColorFor(float elementMultiplier)
-    {
-        if (elementMultiplier > 1f) return new Color(1f, 0.3f, 0.2f);
-        if (elementMultiplier < 1f) return new Color(0.6f, 0.6f, 0.6f);
-        return Color.white;
-    }
-
-    private Transform ResolveEffectParent()
-    {
-        if (effectParent != null) return effectParent;
-        if (battleLogText != null && battleLogText.canvas != null) return battleLogText.canvas.transform;
-        return null;
-    }
-
-    private IEnumerator ShakeUI(float duration)
-    {
-        Vector2 originalPos = shakeTarget.anchoredPosition;
-        float t = 0f;
-        while (t < duration)
-        {
-            t += Time.deltaTime;
-            Vector2 offset = Random.insideUnitCircle * shakeStrength * (1f - t / duration);
-            shakeTarget.anchoredPosition = originalPos + offset;
-            yield return null;
-        }
-        shakeTarget.anchoredPosition = originalPos;
-    }
-
-    private void SetLog(string text)
-    {
-        if (battleLogText != null) battleLogText.text = text;
     }
 }

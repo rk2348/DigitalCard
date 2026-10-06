@@ -15,6 +15,7 @@ public class MonsterVisual2D : MonoBehaviour
     private readonly List<Color> originalColors = new List<Color>();
     private RectTransform rectTransform;
     private Vector2 homeAnchoredPosition;
+    private Vector3 homeScale;
     private Coroutine idleCoroutine;
     private bool isFainted = false;
 
@@ -35,6 +36,7 @@ public class MonsterVisual2D : MonoBehaviour
         }
 
         homeAnchoredPosition = rectTransform.anchoredPosition;
+        homeScale = rectTransform.localScale;
     }
 
     public void StartIdle()
@@ -60,6 +62,7 @@ public class MonsterVisual2D : MonoBehaviour
             t += Time.deltaTime;
             float y = Mathf.Sin(t * 1.5f) * 6f; // ピクセル単位の上下バウンス
             rectTransform.anchoredPosition = homeAnchoredPosition + new Vector2(0f, y);
+            rectTransform.localScale = homeScale * (1f + Mathf.Sin(t * 3f) * 0.012f);
             yield return null;
         }
     }
@@ -78,9 +81,9 @@ public class MonsterVisual2D : MonoBehaviour
         Vector2 anticipatePos = homeAnchoredPosition + new Vector2(-dir * lungeDistance * 0.25f, 0f);
         Vector2 lungePos = homeAnchoredPosition + new Vector2(dir * lungeDistance, 0f);
 
-        Vector3 normalScale = Vector3.one;
-        Vector3 squashScale = new Vector3(0.85f, 1.15f, 1f); // 溜め：縦に伸びて力をためる
-        Vector3 stretchScale = new Vector3(1.25f, 0.8f, 1f); // 突進：横に伸びて勢いを表現
+        Vector3 normalScale = homeScale;
+        Vector3 squashScale = Vector3.Scale(homeScale, new Vector3(0.86f, 1.12f, 1f));
+        Vector3 stretchScale = Vector3.Scale(homeScale, new Vector3(1.18f, 0.86f, 1f));
 
         float anticipateDuration = duration * 0.25f;
         float thrustDuration = duration * 0.35f;
@@ -99,9 +102,10 @@ public class MonsterVisual2D : MonoBehaviour
         while (t < duration)
         {
             t += Time.deltaTime;
-            float ratio = t / duration;
-            rectTransform.anchoredPosition = Vector2.Lerp(fromPos, toPos, ratio);
-            rectTransform.localScale = Vector3.Lerp(fromScale, toScale, ratio);
+            float ratio = Mathf.Clamp01(t / duration);
+            float eased = ratio < 0.5f ? 2f * ratio * ratio : 1f - Mathf.Pow(-2f * ratio + 2f, 2f) / 2f;
+            rectTransform.anchoredPosition = Vector2.LerpUnclamped(fromPos, toPos, eased);
+            rectTransform.localScale = Vector3.LerpUnclamped(fromScale, toScale, eased);
             yield return null;
         }
         rectTransform.anchoredPosition = toPos;
@@ -113,8 +117,8 @@ public class MonsterVisual2D : MonoBehaviour
     /// </summary>
     public IEnumerator PlayGuardPulse(float duration)
     {
-        Vector3 normalScale = Vector3.one;
-        Vector3 pulseScale = Vector3.one * 1.15f;
+        Vector3 normalScale = homeScale;
+        Vector3 pulseScale = homeScale * 1.12f;
 
         yield return ScaleTo(normalScale, pulseScale, duration * 0.3f);
         yield return ScaleTo(pulseScale, normalScale, duration * 0.7f);

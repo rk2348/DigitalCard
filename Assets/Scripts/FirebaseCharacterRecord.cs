@@ -37,6 +37,13 @@ public class FirebaseCharacterRecord
     public string skillName;
     public string skillDescription;
 
+    /// 必殺技レベル("Strong" / "Normal" / "Weak")。登録時にシード値から決めて保存する。
+    /// この項目がない古い登録データは、FirebaseCharacterMapperがシード値から同じ値を再計算する。
+    public string specialLevel;
+
+    /// 対戦枠に参加したスマホの匿名認証UID(/battleSlots のデータにのみ入る)。
+    public string uid;
+
     /// 背景切り抜き済みの写真(PNGのdata URL文字列。例: "data:image/png;base64,....")。
     /// 撮影せずに登録した場合は空/nullになる。
     public string photoDataUrl;

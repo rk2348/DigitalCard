@@ -17,3 +17,14 @@ public class BattleSlotsRecord
     public FirebaseCharacterRecord player1;
     public FirebaseCharacterRecord player2;
 }
+
+/// <summary>
+/// /battleSlots.json?shallow=true の応答。埋まっている枠のキーだけが true で返る。
+/// 待機中のポーリングで写真を含む全データを毎回取得しないために使う。
+/// </summary>
+[Serializable]
+public class BattleSlotsPresence
+{
+    public bool player1;
+    public bool player2;
+}

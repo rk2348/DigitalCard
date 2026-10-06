@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -9,37 +8,38 @@ using UnityEngine.Networking;
 /// バトル開始条件を「スマホ側で2台分の対戦登録が揃うこと」に一本化するための待受コンポーネント。
 ///
 /// 【全体の流れ】
-/// 1. プレイヤーはそれぞれ自分のスマホでQRスキャン→実物撮影→背景切り抜き→名前入力→登録を行う
-///    (app.js側)。登録が完了すると、app.js側がFirebaseの
-///    /battleSlots/player1 または /battleSlots/player2 の空いている方に
-///    (transaction()で競合を避けつつ)自分のデータを書き込む。
-/// 2. PC(Unity)側はこのコンポーネントが /battleSlots を定期的にポーリングし、
-///    player1・player2の両方が埋まったら試合成立とみなす。
-/// 3. 試合成立したら両者のCharacterStats(実物の写真つき)を組み立ててOnMatchReadyで通知し、
-///    /battleSlotsをクリアする(次の組がまた入れるようにする)。
+/// 1. プレイヤーはスマホ(docs/app.js)で登録済みカードを読み取り、この卓の
+///    /tables/{tableId}/battleSlots/player1 または player2 の空いている方に(transactionで)参加する。
+/// 2. PC(Unity)側はこのコンポーネントが battleSlots を shallow 取得(埋まっている枠のキーだけ)で
+///    定期的にポーリングする。写真を含む全データは、2人が揃った時に1回だけ取得する。
+/// 3. 試合成立時は、まず /activeBattle を新しい matchId で初期化し、その後で battleSlots を空にする。
+///    スマホは「自分の枠が消えた」ことを合図に activeBattle の購読を始めるので、
+///    この順序により前の試合の結果(status:"finished")を読んでしまうことがない。
 ///
 /// 【重要】PC(Unity)側でQRコードを直接読み取ることは想定していない。
-/// カメラ・QRコード解析はすべてスマホ(html5-qrcode)側で完結させ、PC側はFirebaseの
-/// battleSlotsを見るだけ、という役割分担にしている。
 ///
 /// ステータス・スキルはスマホ(JavaScript)側で既に確定させた値をそのまま使う。
 /// C#のCharacterStats.AssignRandomStats(seed)で同じseedから再計算すると、
 /// 乱数アルゴリズムの違い(JS:mulberry32 / C#:System.Random)により結果が
 /// 一致しなくなるため、seedからの再計算はあえて行わない。
 ///
+/// 接続先と卓IDは FirebaseRest(Resources/FirebaseSettings.json)で一元管理する。
+///
 /// 【セットアップ方法】
 /// 1. バトルシーンに空のGameObjectを作成し、このスクリプトをアタッチ
-/// 2. databaseUrlにFirebaseのdatabaseURL(例: https://xxxx-default-rtdb.firebaseio.com)を設定
-/// 3. waitingPanel(任意)に「対戦相手を待っています」等を表示するUIパネルをドラッグ
-///    (試合成立時に自動でSetActive(false)される)
-/// 4. statusText(任意)に状況テキスト(プレイヤー1/2の参加状況)を表示するTextMeshProUGUIをドラッグ
-/// 5. BattleManager側のbattleQueueIntakeにこのコンポーネントをドラッグし、
-///    OnMatchReadyを購読してもらう
+/// 2. waitingPanel(任意)に「対戦相手を待っています」等を表示するUIパネルをドラッグ
+/// 3. statusText(任意)に状況テキストを表示するTextMeshProUGUIをドラッグ
+/// 4. BattleManager側のbattleQueueIntakeにこのコンポーネントをドラッグする
 /// </summary>
 public class BattleQueueIntake : MonoBehaviour
 {
-    [Tooltip("FirebaseコンソールのdatabaseURL（例: https://digitalcard-b825d-default-rtdb.firebaseio.com）")]
-    [SerializeField] private string databaseUrl = "";
+    /// <summary>試合成立時に渡す情報。</summary>
+    public class MatchInfo
+    {
+        public string matchId;
+        public CharacterStats player1;
+        public CharacterStats player2;
+    }
 
     [Tooltip("ポーリング間隔（秒）")]
     [SerializeField] private float pollIntervalSeconds = 1.5f;
@@ -50,20 +50,28 @@ public class BattleQueueIntake : MonoBehaviour
     [Tooltip("状況メッセージ(プレイヤー1/2の参加状況)の表示先(任意)")]
     [SerializeField] private TextMeshProUGUI statusText;
 
-    /// <summary>2人分の登録が揃った時に発火。引数は(プレイヤー1, プレイヤー2)。</summary>
-    public event Action<CharacterStats, CharacterStats> OnMatchReady;
+    /// <summary>2人分の登録が揃い、activeBattleの初期化と枠のクリアが済んだ時に発火。</summary>
+    public event Action<MatchInfo> OnMatchReady;
 
-    private bool matchStarted = false;
+    /// <summary>参加枠の状況が取得できるたびに発火(プレイヤー1参加済みか, その名前, プレイヤー2参加済みか, その名前)。</summary>
+    public event Action<bool, string, bool, string> OnSlotsChanged;
+
+    private bool matchStarted;
+
+    // 参加者名の表示用キャッシュ(枠が埋まった時に名前だけを1回取得する)
+    private string player1Name;
+    private string player2Name;
+
+    private string SlotsPath => $"{FirebaseRest.TablePath}/battleSlots";
 
     private void Start()
     {
-        if (string.IsNullOrEmpty(databaseUrl))
+        if (string.IsNullOrEmpty(FirebaseRest.DatabaseUrl))
         {
-            Debug.LogError("BattleQueueIntake: databaseUrlが設定されていません。");
+            Debug.LogError("BattleQueueIntake: FirebaseSettings.json の databaseUrl が設定されていません。");
             return;
         }
 
-        databaseUrl = databaseUrl.TrimEnd('/');
         StartCoroutine(PollLoop());
     }
 
@@ -82,158 +90,121 @@ public class BattleQueueIntake : MonoBehaviour
 
     private IEnumerator PollOnce()
     {
-        string url = $"{databaseUrl}/battleSlots.json";
-
-        using (UnityWebRequest req = UnityWebRequest.Get(url))
+        BattleSlotsPresence presence = null;
+        yield return FirebaseRest.Get(SlotsPath, req =>
         {
-            yield return req.SendWebRequest();
-
             if (req.result != UnityWebRequest.Result.Success)
             {
                 Debug.LogWarning("BattleQueueIntake: battleSlotsの取得に失敗しました: " + req.error);
-                yield break;
+                return;
             }
+            presence = ParseOrDefault<BattleSlotsPresence>(req.downloadHandler.text) ?? new BattleSlotsPresence();
+        }, "shallow=true");
 
+        if (presence == null) yield break;
+
+        if (!presence.player1) player1Name = null;
+        else if (player1Name == null) yield return StartCoroutine(FetchName("player1", n => player1Name = n));
+
+        if (!presence.player2) player2Name = null;
+        else if (player2Name == null) yield return StartCoroutine(FetchName("player2", n => player2Name = n));
+
+        SetStatus(
+            $"卓 {FirebaseRest.TableId}　" +
+            $"プレイヤー1: {(presence.player1 ? (player1Name ?? "") + " 参加済み" : "待機中")} / " +
+            $"プレイヤー2: {(presence.player2 ? (player2Name ?? "") + " 参加済み" : "待機中")}");
+        OnSlotsChanged?.Invoke(presence.player1, player1Name, presence.player2, player2Name);
+
+        if (presence.player1 && presence.player2)
+        {
+            yield return StartCoroutine(StartMatch());
+        }
+    }
+
+    private IEnumerator FetchName(string slot, Action<string> onName)
+    {
+        yield return FirebaseRest.Get($"{SlotsPath}/{slot}/characterName", req =>
+        {
+            if (req.result != UnityWebRequest.Result.Success) return;
             string json = req.downloadHandler.text;
-            if (string.IsNullOrEmpty(json) || json == "null")
-            {
-                SetStatus("プレイヤー1: 待機中 / プレイヤー2: 待機中");
-                yield break;
-            }
-
-            BattleSlotsRecord slots = null;
-            bool parseFailed = false;
-            try
-            {
-                slots = JsonUtility.FromJson<BattleSlotsRecord>(json);
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning("BattleQueueIntake: battleSlotsのパースに失敗しました: " + e.Message);
-                parseFailed = true;
-            }
-
-            if (parseFailed || slots == null)
-            {
-                yield break;
-            }
-
-            bool player1Ready = slots.player1 != null && !string.IsNullOrEmpty(slots.player1.characterName);
-            bool player2Ready = slots.player2 != null && !string.IsNullOrEmpty(slots.player2.characterName);
-
-            SetStatus(
-                $"プレイヤー1: {(player1Ready ? slots.player1.characterName + " 参加済み" : "待機中")} / " +
-                $"プレイヤー2: {(player2Ready ? slots.player2.characterName + " 参加済み" : "待機中")}");
-
-            if (player1Ready && player2Ready)
-            {
-                matchStarted = true;
-
-                CharacterStats p1 = BuildCharacterStats(slots.player1);
-                CharacterStats p2 = BuildCharacterStats(slots.player2);
-
-                // 次の組がまた登録できるよう、先にサーバー側をクリアしておく
-                yield return StartCoroutine(ClearSlots());
-
-                if (waitingPanel != null) waitingPanel.SetActive(false);
-
-                OnMatchReady?.Invoke(p1, p2);
-            }
-        }
+            if (json.Length >= 2 && json[0] == '"') onName(json.Substring(1, json.Length - 2));
+        });
     }
 
     /// <summary>
-    /// 試合成立後、次の組がまた登録できるようbattleSlotsを空にする(nullで上書き)。
+    /// 2人分の全データを取得し、activeBattleを初期化してから枠を空にする。
+    /// どこかで失敗した場合は何もせず、次回のポーリングでやり直す。
     /// </summary>
-    private IEnumerator ClearSlots()
+    private IEnumerator StartMatch()
     {
-        string url = $"{databaseUrl}/battleSlots.json";
-        byte[] body = Encoding.UTF8.GetBytes("null");
-
-        using (UnityWebRequest req = new UnityWebRequest(url, "PUT"))
+        BattleSlotsRecord slots = null;
+        yield return FirebaseRest.Get(SlotsPath, req =>
         {
-            req.uploadHandler = new UploadHandlerRaw(body);
-            req.downloadHandler = new DownloadHandlerBuffer();
-            req.SetRequestHeader("Content-Type", "application/json");
+            if (req.result == UnityWebRequest.Result.Success)
+                slots = ParseOrDefault<BattleSlotsRecord>(req.downloadHandler.text);
+        });
 
-            yield return req.SendWebRequest();
+        bool player1Ready = slots?.player1 != null && !string.IsNullOrEmpty(slots.player1.characterName);
+        bool player2Ready = slots?.player2 != null && !string.IsNullOrEmpty(slots.player2.characterName);
+        if (!player1Ready || !player2Ready) yield break;
 
-            if (req.result != UnityWebRequest.Result.Success)
-            {
-                Debug.LogWarning("BattleQueueIntake: battleSlotsのクリアに失敗しました: " + req.error);
-            }
-        }
+        string matchId = Guid.NewGuid().ToString("N");
+        string initJson =
+            "{\"matchId\":\"" + matchId + "\"" +
+            ",\"status\":\"starting\"" +
+            ",\"player1Uid\":" + JsonString(slots.player1.uid) +
+            ",\"player2Uid\":" + JsonString(slots.player2.uid) +
+            ",\"player1Name\":" + JsonString(slots.player1.characterName) +
+            ",\"player2Name\":" + JsonString(slots.player2.characterName) + "}";
+
+        bool initialized = false;
+        yield return FirebaseRest.Write("PUT", $"{FirebaseRest.TablePath}/activeBattle", initJson, ok => initialized = ok);
+        if (!initialized) yield break;
+
+        // 次の組がまた登録できるよう、試合データの初期化が済んでから枠を空にする
+        bool cleared = false;
+        yield return FirebaseRest.Write("PUT", SlotsPath, "null", ok => cleared = ok);
+        if (!cleared) yield break;
+
+        matchStarted = true;
+        if (waitingPanel != null) waitingPanel.SetActive(false);
+
+        OnMatchReady?.Invoke(new MatchInfo
+        {
+            matchId = matchId,
+            player1 = FirebaseCharacterMapper.ToCharacterStats(slots.player1, nameof(BattleQueueIntake)),
+            player2 = FirebaseCharacterMapper.ToCharacterStats(slots.player2, nameof(BattleQueueIntake)),
+        });
     }
 
     /// <summary>
-    /// Firebaseから取得したレコードをCharacterStatsに変換する(BattleCardIntakeと同じロジック)。
+    /// 受付を止める(開発者用のデモ対戦をPCだけで始める時に使う)。
+    /// Firebase上の枠には触れないので、スマホから参加済みの人がいれば次の試合の受付で拾われる。
     /// </summary>
-    private CharacterStats BuildCharacterStats(FirebaseCharacterRecord record)
+    public void StopWaiting()
     {
-        CharacterStats stats = new CharacterStats(record.characterName)
-        {
-            attack = record.attack,
-            defense = record.defense,
-            speed = record.speed,
-            hp = record.hp,
-            maxHp = record.maxHp,
-            isMutation = record.isMutation,
-        };
-
-        if (!string.IsNullOrEmpty(record.element) && Enum.TryParse(record.element, out ElementType parsedElement))
-        {
-            stats.element = parsedElement;
-        }
-        else
-        {
-            Debug.LogWarning($"BattleQueueIntake: 未知の属性名です({record.element})。既定値を使用します。");
-        }
-
-        if (!string.IsNullOrEmpty(record.skillType) && Enum.TryParse(record.skillType, out SkillType parsedSkillType))
-        {
-            stats.skill = new CharacterSkill(parsedSkillType, record.ratio);
-        }
-        else
-        {
-            Debug.LogWarning($"BattleQueueIntake: 未知のスキル種別です({record.skillType})。スキル無しとして扱います。");
-        }
-
-        stats.photoSprite = BuildSpriteFromDataUrl(record.photoDataUrl);
-
-        return stats;
+        matchStarted = true;
+        StopAllCoroutines();
     }
 
-    /// <summary>
-    /// data URL形式("data:image/png;base64,....")の文字列をSpriteに変換する。
-    /// 写真が無い/デコードに失敗した場合はnullを返す(MonsterSpriteBuilder側で
-    /// 手続き生成にフォールバックする)。
-    /// </summary>
-    private Sprite BuildSpriteFromDataUrl(string dataUrl)
+    private static T ParseOrDefault<T>(string json) where T : class
     {
-        if (string.IsNullOrEmpty(dataUrl)) return null;
-
-        int commaIndex = dataUrl.IndexOf(',');
-        string base64Data = commaIndex >= 0 ? dataUrl.Substring(commaIndex + 1) : dataUrl;
-
-        byte[] imageBytes;
+        if (string.IsNullOrEmpty(json) || json == "null") return null;
         try
         {
-            imageBytes = Convert.FromBase64String(base64Data);
+            return JsonUtility.FromJson<T>(json);
         }
-        catch (FormatException e)
+        catch (Exception e)
         {
-            Debug.LogWarning("BattleQueueIntake: 写真データ(base64)のデコードに失敗しました: " + e.Message);
+            Debug.LogWarning($"BattleQueueIntake: {typeof(T).Name}のパースに失敗しました: {e.Message}");
             return null;
         }
+    }
 
-        Texture2D texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-        if (!texture.LoadImage(imageBytes))
-        {
-            Debug.LogWarning("BattleQueueIntake: 写真データのTexture2Dへの変換に失敗しました。");
-            return null;
-        }
-
-        return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100f);
+    private static string JsonString(string value)
+    {
+        if (value == null) return "null";
+        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     }
 
     private void SetStatus(string text)

@@ -30,6 +30,9 @@ public class CharacterStats
     // 突然変異(レアカード)かどうか
     public bool isMutation;
 
+    // 必殺技レベル(強/普/弱のうち1つ)。このレベルで攻撃が命中すると追加倍率とスキル効果が発動する。
+    public AttackLevel specialLevel;
+
     /// <summary>
     /// スマホで撮影・背景切り抜きした実物の写真(バトル画面などでの表示用)。
     /// QRコードやFirebaseへのJSONシリアライズ対象ではなく、あくまで実行時にだけ
@@ -73,6 +76,7 @@ public class CharacterStats
         speed = UnityEngine.Random.Range(5, 21);
         maxHp = 100;
         hp = maxHp;
+        specialLevel = (AttackLevel)UnityEngine.Random.Range(0, 3);
 
         // 6属性からランダムに1つ決定
         int elementCount = Enum.GetValues(typeof(ElementType)).Length;
@@ -127,6 +131,7 @@ public class CharacterStats
         speed = rng.Next(5, 21);
         maxHp = 100;
         hp = maxHp;
+        specialLevel = BattleRules.ComputeSpecialLevel(seed);
 
         // 6属性からランダムに1つ決定
         int elementCount = Enum.GetValues(typeof(ElementType)).Length;
@@ -201,6 +206,7 @@ public class CharacterStats
             element = element,
             skill = skill != null ? new CharacterSkill(skill.skillType, skill.ratio) : null,
             isMutation = isMutation,
+            specialLevel = specialLevel,
             dataVersion = dataVersion
         };
         return clone;
