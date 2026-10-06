@@ -18,6 +18,19 @@
   <div class="stage-spotlight"></div>
   <div class="stage-dust" id="stage-dust"></div>
 
+  <!-- 登録済みのカードを読み取った時に、画面いっぱいに大きく出す警告 -->
+  <div id="registered-overlay" class="registered-overlay" role="alertdialog" aria-labelledby="registered-title">
+    <div class="registered-panel">
+      <div class="registered-seal" aria-hidden="true"><span>済</span></div>
+      <p id="registered-title" class="registered-title">既に<br />登録済みです</p>
+      <img id="registered-photo" class="registered-photo" alt="" />
+      <p class="registered-name-label">このカードのキャラクター</p>
+      <p id="registered-name" class="registered-name"></p>
+      <p class="registered-hint">別のカードを読み取ってください</p>
+      <button id="registered-close-btn" class="registered-close-btn">OK</button>
+    </div>
+  </div>
+
   <div class="container">
     <header class="brand">
       <div class="brand-mark" aria-hidden="true"><span>召</span></div>
@@ -149,6 +162,7 @@
     </div>
 
     <div id="status" class="status">読み込み中...</div>
+    <p id="app-version" class="app-version"></p>
   </div>
 
   <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-app-compat.js"></script>
