@@ -61,6 +61,8 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private int maxConsecutiveTimeouts = 2;
     [Tooltip("試合を中断して次の試合の受付に戻すキー(運営者用)")]
     [SerializeField] private KeyCode abortKey = KeyCode.R;
+    [Tooltip("試合前の受付中に、待機している枠をすべて空けるキー(運営者用。立ち去った人の枠が残った時に使う)")]
+    [SerializeField] private KeyCode resetQueueKey = KeyCode.Delete;
     [Tooltip("キーボード対CPUのデモ対戦で、プレイヤーが選ぶ制限時間（秒）")]
     [SerializeField] private float keyboardChoiceSeconds = 20f;
 
@@ -197,6 +199,12 @@ public class BattleManager : MonoBehaviour
         {
             Debug.Log("BattleManager: 運営者の操作で試合を中断し、受付に戻ります。");
             ReloadForNextMatch();
+        }
+
+        if (Input.GetKeyDown(resetQueueKey) && !matchStarted && battleQueueIntake != null)
+        {
+            battleQueueIntake.ResetQueue();
+            hud.SetSlots(false, null, false, null);
         }
 
         if (!matchStarted && DeveloperFeaturesAllowed)

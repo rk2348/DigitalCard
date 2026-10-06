@@ -6,7 +6,7 @@
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
 // 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {
@@ -487,6 +487,7 @@ function stopScanner() {
 /// 対戦相手を待っている途中でホームに戻った場合、自分の枠を空ける(他の人が参加できるように)。
 /// 既に試合が始まって枠がクリアされた後や、別の人の枠になっている場合は何もしない。
 function leaveBattleQueue() {
+  stopQueueGuards();
   if (!myBattleSlot || myQueueJoinedAt == null || currentMatchId) return;
   const joinedAt = myQueueJoinedAt;
   db.ref(`${TABLE_PATH}/battleSlots/${myBattleSlot}`)
@@ -504,6 +505,56 @@ function detachBattleQueueListener() {
   }
   battleQueueListenerRef = null;
   battleQueueListenerHandler = null;
+}
+
+// ==================== 対戦待ちの間の見張り ====================
+// 大人数で遊ぶと、待機中の人が立ち去って枠が埋まったままになることがある。その対策:
+// A. 通信が切れたら(ブラウザを閉じた・圏外など)、Firebaseが自動で自分の枠を消す(onDisconnect)
+// B. 待機中は queuePresence/{枠} に数秒ごとに生存信号を書き込む。途絶えた枠や、
+//    待ち時間が長すぎる枠は、会場PC(BattleQueueIntake)が消す
+const QUEUE_PRESENCE_INTERVAL_MS = 5000;
+let queuePresenceTimer = null;
+let queueGuardSlot = null;
+
+function queuePresenceRef(slot) {
+  return db.ref(`${TABLE_PATH}/queuePresence/${slot}`);
+}
+
+function sendQueuePresence() {
+  if (!queueGuardSlot) return;
+  queuePresenceRef(queueGuardSlot)
+    .set({ uid: currentUid(), at: firebase.database.ServerValue.TIMESTAMP })
+    .catch((e) => logDebug("エラー(対戦待ちの生存信号): " + e));
+}
+
+function startQueueGuards(slot) {
+  stopQueueGuards();
+  queueGuardSlot = slot;
+  // A. 切断されたら枠と生存信号を自動で消す
+  db.ref(`${TABLE_PATH}/battleSlots/${slot}`)
+    .onDisconnect()
+    .remove()
+    .catch((e) => logDebug("エラー(切断時の枠の削除の予約): " + e));
+  queuePresenceRef(slot)
+    .onDisconnect()
+    .remove()
+    .catch(() => {});
+  // B. 生存信号
+  sendQueuePresence();
+  queuePresenceTimer = setInterval(sendQueuePresence, QUEUE_PRESENCE_INTERVAL_MS);
+}
+
+/// 待機が終わった(試合が始まった・ホームに戻った・枠が消された)時に、見張りを止める。
+/// 切断時の削除の予約も取り消す(残すと、後で同じ端末が別の枠に入った時に誤って消してしまうため)。
+function stopQueueGuards() {
+  if (queuePresenceTimer) clearInterval(queuePresenceTimer);
+  queuePresenceTimer = null;
+  if (!queueGuardSlot) return;
+  const slot = queueGuardSlot;
+  queueGuardSlot = null;
+  db.ref(`${TABLE_PATH}/battleSlots/${slot}`).onDisconnect().cancel().catch(() => {});
+  queuePresenceRef(slot).onDisconnect().cancel().catch(() => {});
+  queuePresenceRef(slot).remove().catch(() => {});
 }
 
 function startScanner() {
@@ -1391,6 +1442,7 @@ function onJoinedBattleQueue(mySlot) {
   setBattleStatus(`対戦キューに参加しました(${slotLabel})。相手を待っています…`, "success");
 
   myBattleSlot = mySlot;
+  startQueueGuards(mySlot);
   const slotsRef = db.ref(`${TABLE_PATH}/battleSlots`);
   const handler = slotsRef.on("value", (snapshot) => {
     const slots = snapshot.val();
@@ -1403,8 +1455,11 @@ function onJoinedBattleQueue(mySlot) {
     // 自分が登録したはずのスロットが消えている ＝ PC側で試合が成立し、
     // 次の組のためにリセットされた合図。ここからは対戦本編(activeBattle)を見て、
     // 自分の番が来たらこのスマホ上で強/普/弱を選ぶ画面に切り替える。
+    // (時間切れ・通信切れ・運営者のリセットで枠が消された場合は、startBattleTurnListener の中で
+    //  自分の試合が始まらないことを確かめてから知らせる)
     if (!slots || !slots[mySlot]) {
       detachBattleQueueListener();
+      stopQueueGuards();
       startBattleTurnListener(mySlot);
     }
   });
@@ -1423,6 +1478,17 @@ function startBattleTurnListener(mySlot) {
   submittedBattleTurnNumber = -1;
 
   startBattlePresence(mySlot);
+
+  // 試合が成立した時は、会場PCが試合データを用意してから枠を消すので、すぐに自分の試合が見つかる。
+  // しばらく見つからなければ、枠は試合以外の理由(待ち時間の上限・通信切れ・運営者のリセット)で消されている。
+  clearTimeout(matchConfirmTimer);
+  matchConfirmTimer = setTimeout(() => {
+    if (currentMatchId || myBattleSlot !== mySlot) return;
+    finishBattleView(
+      "対戦待ちが解除されました（待ち時間の上限・通信の途切れ・運営者によるリセットのいずれか）。もう一度エントリーしてください",
+      "lose"
+    );
+  }, MATCH_CONFIRM_TIMEOUT_MS);
 
   battleWaitSectionEl.style.display = "none";
   battleTurnSectionEl.style.display = "block";
@@ -1554,9 +1620,13 @@ function detachBattleTurnListener() {
   }
   battleTurnListenerRef = null;
   battleTurnListenerHandler = null;
+  clearTimeout(matchConfirmTimer);
   stopTurnCountdown();
   stopBattlePresence();
 }
+
+const MATCH_CONFIRM_TIMEOUT_MS = 15000;
+let matchConfirmTimer = null;
 
 // ==================== 対戦中の生存信号 ====================
 // 対戦中は activeBattle/presence/{自分の枠} に数秒ごとにサーバー時刻を書き込む。

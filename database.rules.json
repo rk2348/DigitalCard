@@ -29,6 +29,12 @@
         "display": {
           ".read": "auth != null"
         },
+        "queuePresence": {
+          "$slot": {
+            ".write": "auth != null && ($slot === 'player1' || $slot === 'player2') && (newData.exists() ? (newData.child('uid').val() === auth.uid && root.child('tables').child($tableId).child('battleSlots').child($slot).child('uid').val() === auth.uid) : data.child('uid').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['uid', 'at']) && newData.child('at').isNumber()"
+          }
+        },
         "activeBattle": {
           ".read": "auth != null",
           "presence": {
