@@ -392,7 +392,7 @@ public static class StadiumKit
         Object.Destroy(ring);
     }
 
-    private static ParticleSystem CreateParticleSystem(string name, Vector3 position, Material material)
+    internal static ParticleSystem CreateParticleSystem(string name, Vector3 position, Material material)
     {
         GameObject go = new GameObject(name);
         go.transform.position = position;
@@ -414,7 +414,7 @@ public static class StadiumKit
         return ps;
     }
 
-    private static void FadeOut(ParticleSystem ps)
+    internal static void FadeOut(ParticleSystem ps)
     {
         ParticleSystem.ColorOverLifetimeModule col = ps.colorOverLifetime;
         col.enabled = true;

@@ -6,7 +6,7 @@
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
 // 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.4.0";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {

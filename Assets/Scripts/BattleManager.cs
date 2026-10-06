@@ -322,7 +322,8 @@ public class BattleManager : MonoBehaviour
         Fighter3D attackerFighter = attackerIsPlayer1 ? fighter1 : fighter2;
         Fighter3D defenderFighter = attackerIsPlayer1 ? fighter2 : fighter1;
 
-        stadiumCamera.Broadcast(0.9f);
+        // 選択を待つ間は、攻撃側を手前に置いたバトルビュー
+        stadiumCamera.BattleView(attackerFighter.Home, defenderFighter.Home, 0.9f);
         attackerFighter.SetRoleColor(OrisamoUI.AttackColor);
         defenderFighter.SetRoleColor(OrisamoUI.DefenseColor);
         SetRoles(attackerIsPlayer1, false, false);
@@ -418,10 +419,12 @@ public class BattleManager : MonoBehaviour
         yield return hud.PlayReveal(attackLevel, defenseLevel, attackerIsPlayer1, guarded);
         ClearRoles();
 
+        float power = AttackPower(attackLevel);
         if (guarded)
         {
             stadiumCamera.OverShoulder(attackerFighter.Home, defenderFighter.Home);
-            yield return new WaitForSeconds(0.35f);
+            ElementalEffects.Charge(attacker.element, attackerFighter.Home, attackerFighter.Height, power);
+            yield return new WaitForSeconds(0.55f);
             yield return attackerFighter.PlayLunge(defenderFighter.Home, () =>
             {
                 StartCoroutine(defenderFighter.PlayGuard());
@@ -452,16 +455,18 @@ public class BattleManager : MonoBehaviour
             yield return new WaitForSeconds(0.5f);
         }
 
+        if (heavy) power *= 1.4f;
         stadiumCamera.OverShoulder(attackerFighter.Home, defenderFighter.Home);
-        yield return new WaitForSeconds(0.35f);
+        ElementalEffects.Charge(attacker.element, attackerFighter.Home, attackerFighter.Height, power);
+        yield return new WaitForSeconds(0.55f);
         yield return attackerFighter.PlayLunge(defenderFighter.Home, () =>
         {
             defender.hp -= damage;
             hud.SetHp(!attackerIsPlayer1, defender.hp, defender.maxHp);
             StartCoroutine(defenderFighter.PlayHit(attackerFighter.Home, heavy));
-            StadiumKit.Burst(defenderFighter.ChestPoint, attackColor, heavy ? 90 : 45, heavy ? 13f : 9f);
-            StadiumKit.Shockwave(defenderFighter.Home, attackColor, heavy ? 10f : 6f);
-            stadiumCamera.Shake(heavy ? 1.1f : 0.55f);
+            ElementalEffects.Impact(attacker.element, defenderFighter.ChestPoint, defenderFighter.Home, power);
+            if (heavy || attackLevel == AttackLevel.Strong) ElementalEffects.HitStop(heavy ? 0.12f : 0.07f);
+            stadiumCamera.Shake((heavy ? 1.1f : 0.55f) * Mathf.Sqrt(power));
             hud.SpawnDamageNumber(defenderFighter.HeadPoint, damage, DamageColorFor(elementMultiplier), heavy);
             stadium.Cheer(heavy ? 1f : 0.6f);
         });
@@ -574,6 +579,17 @@ public class BattleManager : MonoBehaviour
     }
 
     /// <summary>CPUの選択。specialBiasの確率で必殺技レベルを狙い、それ以外は3択の均等ランダム。</summary>
+    /// <summary>攻撃エフェクトの強さ(強いほど派手にする)。</summary>
+    private static float AttackPower(AttackLevel level)
+    {
+        switch (level)
+        {
+            case AttackLevel.Strong: return 1.35f;
+            case AttackLevel.Weak: return 0.8f;
+            default: return 1f;
+        }
+    }
+
     /// <summary>通信が切れて自動操作になっている側の案内文。どちらも接続中ならnull。</summary>
     private static string OfflineNotice(CharacterStats offlineA, CharacterStats offlineB)
     {

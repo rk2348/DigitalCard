@@ -26,6 +26,9 @@ public sealed class StadiumCamera : MonoBehaviour
     private float orbitSpeed;
     private float orbitAngle;
 
+    // ゆっくり漂う動き(選択待ちのバトルビューで、画面が止まって見えないように)
+    private float driftAmount;
+
     // 揺れ
     private float shakeAmount;
     private float shakeSeed;
@@ -45,6 +48,7 @@ public sealed class StadiumCamera : MonoBehaviour
     public void Shot(Vector3 position, Vector3 lookAt, float fov, float blendSeconds = 0.6f, bool cut = false)
     {
         orbiting = false;
+        driftAmount = 0f;
         targetPosition = position;
         targetLookAt = lookAt;
         targetFov = fov;
@@ -56,6 +60,7 @@ public sealed class StadiumCamera : MonoBehaviour
     public void Orbit(Vector3 center, float radius, float height, float degreesPerSecond, float fov, float startAngle = float.NaN, bool cut = false)
     {
         orbiting = true;
+        driftAmount = 0f;
         orbitCenter = center;
         orbitRadius = radius;
         orbitHeight = height;
@@ -93,6 +98,32 @@ public sealed class StadiumCamera : MonoBehaviour
         Vector3 position = attacker - toDefender * 6.5f + Vector3.up * 3.4f + Vector3.back * 4.2f;
         Shot(position, defender + Vector3.up * 1.8f, 38f, blend, cut);
     }
+
+    /// <summary>
+    /// ポケモンのバトル画面のような、斜め後ろからのアングル(選択を待っている間に使う)。
+    /// 手前(near)のキャラクターを画面の左下に大きく、奥(far)のキャラクターを右寄りに小さく映し、
+    /// ゆっくり漂わせる。手前には攻撃側を置き、ターンごとに入れ替わる。
+    /// </summary>
+    public void BattleView(Vector3 near, Vector3 far, float blend = 0.9f, bool cut = false)
+    {
+        Vector3 toFar = far - near;
+        toFar.y = 0f;
+        toFar.Normalize();
+        // 観客席の正面側(-Z)へ回り込んだ位置から見る
+        Vector3 side = Vector3.Cross(Vector3.up, toFar);
+        if (side.z > 0f) side = -side;
+        Vector3 position = near - toFar * BattleViewBack + side * BattleViewSide + Vector3.up * BattleViewHeight;
+        Vector3 lookAt = Vector3.Lerp(near, far, BattleViewLookBias) + Vector3.up * 1.2f;
+        Shot(position, lookAt, BattleViewFov, blend, cut);
+        driftAmount = 1f;
+    }
+
+    // バトルビューの位置(手前のキャラクターからの距離)。画面の見え方はここで調整する
+    private const float BattleViewBack = 6f;
+    private const float BattleViewSide = 8f;
+    private const float BattleViewHeight = 6f;
+    private const float BattleViewLookBias = 0.45f;
+    private const float BattleViewFov = 44f;
 
     /// <summary>キャラクターのアップ(正面やや斜め)。</summary>
     public void CloseUp(Vector3 subject, float height, float blend = 0.5f, bool cut = false, float side = 0f)
@@ -132,7 +163,13 @@ public sealed class StadiumCamera : MonoBehaviour
             UpdateOrbitTarget();
         }
 
-        Vector3 position = Vector3.SmoothDamp(transform.position - lastShake, targetPosition, ref positionVelocity, smoothTime);
+        Vector3 drift = Vector3.zero;
+        if (driftAmount > 0f)
+        {
+            float t = Time.time;
+            drift = new Vector3(Mathf.Sin(t * 0.37f) * 0.8f, Mathf.Sin(t * 0.53f) * 0.3f, Mathf.Sin(t * 0.29f + 1.3f) * 0.6f) * driftAmount;
+        }
+        Vector3 position = Vector3.SmoothDamp(transform.position - lastShake, targetPosition + drift, ref positionVelocity, smoothTime);
         currentLookAt = Vector3.SmoothDamp(currentLookAt, targetLookAt, ref lookVelocity, smoothTime);
         Camera.fieldOfView = Mathf.SmoothDamp(Camera.fieldOfView, targetFov, ref fovVelocity, smoothTime);
 
