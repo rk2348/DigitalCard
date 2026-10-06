@@ -322,8 +322,8 @@ public class BattleManager : MonoBehaviour
         Fighter3D attackerFighter = attackerIsPlayer1 ? fighter1 : fighter2;
         Fighter3D defenderFighter = attackerIsPlayer1 ? fighter2 : fighter1;
 
-        // 選択を待つ間は、攻撃側を手前に置いたバトルビュー
-        stadiumCamera.BattleView(attackerFighter.Home, defenderFighter.Home, 0.9f);
+        // 選択を待つ間は、いくつかのカメラアングルを切り替えながら見せる(最初は攻撃側を手前に置いたバトルビュー)
+        Coroutine choosingCamera = StartCoroutine(ChoosingCameraLoop(attackerFighter, defenderFighter));
         attackerFighter.SetRoleColor(OrisamoUI.AttackColor);
         defenderFighter.SetRoleColor(OrisamoUI.DefenseColor);
         SetRoles(attackerIsPlayer1, false, false);
@@ -359,6 +359,7 @@ public class BattleManager : MonoBehaviour
                 yield return null;
             }
             hud.SetCountdown(-1f, 0f);
+            StopCoroutine(choosingCamera); // 選び終えたらカメラの切り替えを止める(この後の早期終了でも動き続けないように)
             attackLevel = choices.attackerDisconnected ? ChooseAiLevel(attacker, aiSpecialBias) : choices.attacker;
             defenseLevel = choices.defenderDisconnected ? ChooseAiLevel(defender, 0f) : choices.defender;
             if (choices.attackerDisconnected || choices.defenderDisconnected)
@@ -413,6 +414,8 @@ public class BattleManager : MonoBehaviour
             SetRoles(attackerIsPlayer1, true, true);
             yield return new WaitForSeconds(0.3f);
         }
+
+        StopCoroutine(choosingCamera);
 
         // 両者の選択を同時に公開
         bool guarded = attackLevel == defenseLevel;
@@ -579,6 +582,65 @@ public class BattleManager : MonoBehaviour
     }
 
     /// <summary>CPUの選択。specialBiasの確率で必殺技レベルを狙い、それ以外は3択の均等ランダム。</summary>
+    // ==================== 選択待ちのカメラワーク ====================
+
+    /// <summary>
+    /// 両者が選んでいる間、テレビ中継のようにカメラアングルを切り替え続ける。
+    /// 同じアングルが続かないようにランダムに選び、切り替えは「カット」と「なめらかな移動」を混ぜる。
+    /// </summary>
+    private IEnumerator ChoosingCameraLoop(Fighter3D attackerFighter, Fighter3D defenderFighter)
+    {
+        Vector3 attackerPos = attackerFighter.Home;
+        Vector3 defenderPos = defenderFighter.Home;
+        Vector3 center = (attackerPos + defenderPos) * 0.5f;
+        float attackerSide = Mathf.Sign(attackerPos.x - center.x);
+        if (attackerSide == 0f) attackerSide = -1f;
+
+        System.Action<bool>[] shots =
+        {
+            // 0. バトルビュー(攻撃側が手前)
+            cut => stadiumCamera.BattleView(attackerPos, defenderPos, cut ? 0.5f : 1.1f, cut),
+            // 1. 逆側からのバトルビュー(防御側が手前)
+            cut => stadiumCamera.BattleViewReverse(defenderPos, attackerPos, cut ? 0.5f : 1.1f, cut),
+            // 2. 横から2人を追いかけるドリー
+            cut => stadiumCamera.Track(
+                center + new Vector3(-attackerSide * 13f, 3.6f, -15f), center + new Vector3(attackerSide * 13f, 3.6f, -15f),
+                center + new Vector3(-attackerSide * 3f, 2.4f, 0f), center + new Vector3(attackerSide * 3f, 2.4f, 0f), 40f, 5f, cut),
+            // 3. 攻撃側を下からあおるヒーローショット(ゆっくり寄る)
+            cut => stadiumCamera.Track(
+                attackerPos + new Vector3(attackerSide * -3.2f, 0.7f, -8.5f), attackerPos + new Vector3(attackerSide * -2.2f, 0.9f, -6f),
+                attackerPos + Vector3.up * (attackerFighter.Height * 0.85f), attackerPos + Vector3.up * (attackerFighter.Height * 0.8f), 40f, 4.5f, cut),
+            // 4. 防御側の緊張した表情に寄る
+            cut => stadiumCamera.Track(
+                defenderPos + new Vector3(-attackerSide * 3.5f, defenderFighter.Height * 0.6f, -9f), defenderPos + new Vector3(-attackerSide * 2.4f, defenderFighter.Height * 0.62f, -6.8f),
+                defenderPos + Vector3.up * (defenderFighter.Height * 0.6f), defenderPos + Vector3.up * (defenderFighter.Height * 0.62f), 34f, 4.5f, cut),
+            // 5. 真上近くから降りてくるクレーン
+            cut => stadiumCamera.Track(
+                center + new Vector3(0f, 24f, -16f), center + new Vector3(0f, 11f, -19f),
+                center + Vector3.up * 0.5f, center + Vector3.up * 1.8f, 44f, 5f, cut),
+            // 6. フィールドをぐるりと回る
+            cut => stadiumCamera.Orbit(center + Vector3.up * 2f, 21f, 6.5f, attackerSide * 9f, 42f, attackerSide > 0f ? -60f : -120f, cut),
+            // 7. 正面の低い位置から2人のにらみ合い(ゆっくり寄る)
+            cut => stadiumCamera.Track(
+                center + new Vector3(0f, 1.3f, -16f), center + new Vector3(0f, 1.5f, -12.5f),
+                center + Vector3.up * 2.8f, center + Vector3.up * 2.6f, 52f, 5f, cut),
+            // 8. 防御側の肩越しに攻撃側を見る
+            cut => stadiumCamera.OverShoulder(defenderPos, attackerPos, cut ? 0.5f : 1.1f, cut),
+        };
+
+        int last = 0;
+        shots[0](false);
+        yield return new WaitForSeconds(Random.Range(3.2f, 4.2f));
+        while (true)
+        {
+            int next;
+            do { next = Random.Range(0, shots.Length); } while (next == last);
+            last = next;
+            shots[next](Random.value < 0.5f);
+            yield return new WaitForSeconds(Random.Range(3f, 4.5f));
+        }
+    }
+
     /// <summary>攻撃エフェクトの強さ(強いほど派手にする)。</summary>
     private static float AttackPower(AttackLevel level)
     {

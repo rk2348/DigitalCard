@@ -29,6 +29,11 @@ public sealed class StadiumCamera : MonoBehaviour
     // ゆっくり漂う動き(選択待ちのバトルビューで、画面が止まって見えないように)
     private float driftAmount;
 
+    // 移動撮影(ドリー/クレーン): 開始位置から終了位置へ一定時間かけて動く
+    private bool tracking;
+    private Vector3 trackFrom, trackTo, trackLookFrom, trackLookTo;
+    private float trackStart, trackDuration;
+
     // 揺れ
     private float shakeAmount;
     private float shakeSeed;
@@ -48,6 +53,7 @@ public sealed class StadiumCamera : MonoBehaviour
     public void Shot(Vector3 position, Vector3 lookAt, float fov, float blendSeconds = 0.6f, bool cut = false)
     {
         orbiting = false;
+        tracking = false;
         driftAmount = 0f;
         targetPosition = position;
         targetLookAt = lookAt;
@@ -60,6 +66,7 @@ public sealed class StadiumCamera : MonoBehaviour
     public void Orbit(Vector3 center, float radius, float height, float degreesPerSecond, float fov, float startAngle = float.NaN, bool cut = false)
     {
         orbiting = true;
+        tracking = false;
         driftAmount = 0f;
         orbitCenter = center;
         orbitRadius = radius;
@@ -118,6 +125,36 @@ public sealed class StadiumCamera : MonoBehaviour
         driftAmount = 1f;
     }
 
+    /// <summary>
+    /// 移動撮影: from から to へ、注視点も lookFrom から lookTo へ、duration 秒かけてゆっくり動かす。
+    /// cut なら開始位置へ即座に切り替えてから動き出す。
+    /// </summary>
+    public void Track(Vector3 from, Vector3 to, Vector3 lookFrom, Vector3 lookTo, float fov, float duration, bool cut = false)
+    {
+        Shot(from, lookFrom, fov, cut ? 0.6f : 1.2f, cut);
+        tracking = true;
+        trackFrom = from;
+        trackTo = to;
+        trackLookFrom = lookFrom;
+        trackLookTo = lookTo;
+        trackStart = Time.time;
+        trackDuration = Mathf.Max(0.1f, duration);
+    }
+
+    /// <summary>バトルビュー(BattleView)のカメラを、反対側(観客席の奥側)から見たもの。</summary>
+    public void BattleViewReverse(Vector3 near, Vector3 far, float blend = 0.9f, bool cut = false)
+    {
+        Vector3 toFar = far - near;
+        toFar.y = 0f;
+        toFar.Normalize();
+        Vector3 side = Vector3.Cross(Vector3.up, toFar);
+        if (side.z < 0f) side = -side;
+        Vector3 position = near - toFar * BattleViewBack + side * (BattleViewSide * 0.8f) + Vector3.up * (BattleViewHeight * 0.85f);
+        Vector3 lookAt = Vector3.Lerp(near, far, BattleViewLookBias) + Vector3.up * 1.2f;
+        Shot(position, lookAt, BattleViewFov, blend, cut);
+        driftAmount = 1f;
+    }
+
     // バトルビューの位置(手前のキャラクターからの距離)。画面の見え方はここで調整する
     private const float BattleViewBack = 6f;
     private const float BattleViewSide = 8f;
@@ -161,6 +198,12 @@ public sealed class StadiumCamera : MonoBehaviour
         {
             orbitAngle += orbitSpeed * Time.deltaTime;
             UpdateOrbitTarget();
+        }
+        else if (tracking)
+        {
+            float p = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((Time.time - trackStart) / trackDuration));
+            targetPosition = Vector3.Lerp(trackFrom, trackTo, p);
+            targetLookAt = Vector3.Lerp(trackLookFrom, trackLookTo, p);
         }
 
         Vector3 drift = Vector3.zero;
