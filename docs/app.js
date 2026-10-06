@@ -154,6 +154,8 @@ const capturePhotoBtn = document.getElementById("capture-photo-btn");
 const retakePhotoBtn = document.getElementById("retake-photo-btn");
 const usePhotoBtn = document.getElementById("use-photo-btn");
 const skipPhotoBtn = document.getElementById("skip-photo-btn");
+const photoFrameEl = document.getElementById("photo-frame");
+const photoTargetEl = document.getElementById("photo-target");
 const cardCharacterCutoutEl = document.getElementById("card-character-cutout");
 const revealCardEl = document.getElementById("reveal-card");
 const revealFlashEl = document.getElementById("reveal-flash");
@@ -201,6 +203,7 @@ let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち�
 let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
 let photoStream = null; // 実物撮影用のカメラストリーム(MediaStream)
 let capturedCutoutDataUrl = null; // 背景切り抜き後のキャラクター写真(PNG, data URL)。未撮影ならnull
+let photoTarget = { x: 0.5, y: 0.5 }; // 切り抜く被写体の位置(撮影枠内の0〜1の座標)。タップで変更する
 
 // "create"(キャラクター作成) または "battle"(対戦開始) のどちらの目的でQRを読むか。
 // ホーム画面でボタンを押すまではnull。
@@ -246,6 +249,10 @@ const ELEMENT_CARD_IMAGES = {
 };
 
 let db = null;
+
+// 「既に登録済みです」と表示したカード。しばらくは同じQRを読み取っても無視する
+let rejectedCardId = null;
+let rejectedCardUntil = 0;
 
 function setStatus(text, type = "info") {
   statusEl.textContent = text;
@@ -479,10 +486,12 @@ function onScanSuccess(decodedText) {
   confirmOverwriteIfRegistered(cardData);
 }
 
-/// 作成モードで読み取ったカードが登録済みなら、上書きしてよいか確認してから撮影に進む。
-/// (確認なしで上書きすると、別の人のキャラクターが消えてしまうため)
+/// 作成モードで読み取ったカードが登録済みなら「既に登録済みです」と表示して登録させない。
+/// (上書きできると、別の人のキャラクターが消えてしまうため)
 function confirmOverwriteIfRegistered(cardData) {
   if (isSending) return;
+  // 登録済みと表示したカードがカメラに映り続けている間は、同じ確認を繰り返さない
+  if (cardData.cardId === rejectedCardId && Date.now() < rejectedCardUntil) return;
   isSending = true;
   isAwaitingName = true; // 確認中に同じQRを読み続けないようにする
 
@@ -491,15 +500,11 @@ function confirmOverwriteIfRegistered(cardData) {
     .then((snapshot) => {
       const existing = snapshot.val();
       if (existing && existing.characterName) {
-        const ok = window.confirm(
-          `このカードは「${existing.characterName}」として登録済みです。\n` +
-            "登録し直すと、名前と写真が上書きされます(能力値は変わりません)。続けますか？"
-        );
-        if (!ok) {
-          isAwaitingName = false;
-          setStatus("キャラクターにするカードのQRコードをカメラにかざしてください");
-          return;
-        }
+        isAwaitingName = false;
+        rejectedCardId = cardData.cardId;
+        rejectedCardUntil = Date.now() + 4000;
+        setStatus(`このカードは既に登録済みです(「${existing.characterName}」)。別のカードを読み取ってください`, "error");
+        return;
       }
       scannedCardData = cardData;
       capturedCutoutDataUrl = null;
@@ -585,16 +590,19 @@ function showPhotoCapture(cardData) {
   // 表示状態を初期化(2回目以降のスキャンでも正しく表示されるように)
   photoVideoEl.style.display = "block";
   cutoutPreviewCanvasEl.style.display = "none";
+  photoTargetEl.style.display = "block";
   capturePhotoBtn.style.display = "inline-block";
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
+  setPhotoTarget(0.5, 0.5);
 
   hideReader();
   nameInputSectionEl.style.display = "none";
   photoCaptureSectionEl.style.display = "block";
-  setStatus("背景がなるべく無地になるようにキャラクターを置いて撮影してください");
+  setStatus("キャラクターをタップして選んでから撮影してください");
 
   startPhotoCamera();
+  loadSegmenter(); // 撮影までにAIモデルを読み込んでおく
 }
 
 /// 撮影用のカメラ(通常のgetUserMedia)を起動する。
@@ -753,7 +761,222 @@ function spawnSparkles(count) {
   }
 }
 
-/// 撮影した写真の背景を切り抜く(単色〜比較的シンプルな背景を想定した簡易版)。
+// ==================== AIによる被写体の切り抜き ====================
+// MediaPipe の Interactive Segmenter(magic_touch モデル、約6MB)を使い、
+// タップした位置にある「物体」だけをマスクとして取り出す。机やPCなどが写り込んでいても、
+// 指定した被写体だけを切り抜ける。モデルを読み込めない環境では従来の色ベースの切り抜きを使う。
+const MEDIAPIPE_VERSION = "0.10.35";
+const MEDIAPIPE_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}`;
+const SEGMENTER_MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/interactive_segmenter/magic_touch/float32/1/magic_touch.tflite";
+const SEGMENT_MAX_DIMENSION = 1024; // 推論に使う画像の最大辺(大きすぎるとスマホで遅くなる)
+
+let segmenterPromise = null;
+
+/// Interactive Segmenter を一度だけ読み込む(GPUで作れなければCPUで作り直す)。失敗時はnullで解決する。
+function loadSegmenter() {
+  if (segmenterPromise) return segmenterPromise;
+  segmenterPromise = (async () => {
+    const { FilesetResolver, InteractiveSegmenter } = await import(`${MEDIAPIPE_BASE}/vision_bundle.mjs`);
+    const fileset = await FilesetResolver.forVisionTasks(`${MEDIAPIPE_BASE}/wasm`);
+    const create = (delegate) =>
+      InteractiveSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: SEGMENTER_MODEL_URL, delegate },
+        outputConfidenceMasks: true,
+        outputCategoryMask: false,
+      });
+    try {
+      return await create("GPU");
+    } catch (e) {
+      logDebug("GPUで切り抜きモデルを作れなかったのでCPUで作ります: " + e);
+      return await create("CPU");
+    }
+  })().catch((e) => {
+    logDebug("エラー(切り抜きモデルの読み込み。従来の方式で切り抜きます): " + e);
+    segmenterPromise = null; // 次の撮影で再試行できるようにする
+    return null;
+  });
+  return segmenterPromise;
+}
+
+/// 撮影枠内の被写体の位置を設定し、目印を動かす(x, yは枠に対する0〜1)。
+function setPhotoTarget(x, y) {
+  photoTarget = { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
+  photoTargetEl.style.left = photoTarget.x * 100 + "%";
+  photoTargetEl.style.top = photoTarget.y * 100 + "%";
+}
+
+photoFrameEl.addEventListener("click", (event) => {
+  if (photoVideoEl.style.display === "none") return; // 切り抜き結果の表示中は動かさない
+  const rect = photoFrameEl.getBoundingClientRect();
+  setPhotoTarget((event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height);
+});
+
+/// 撮影枠に見えている範囲(videoはobject-fit: coverで枠いっぱいに拡大されている)だけを
+/// キャンバスに切り出す。推論が重くならないよう最大辺をSEGMENT_MAX_DIMENSIONに縮める。
+function captureVisibleFrame(canvas) {
+  const vw = photoVideoEl.videoWidth;
+  const vh = photoVideoEl.videoHeight;
+  const frameAspect = photoFrameEl.clientWidth / photoFrameEl.clientHeight || 3 / 4;
+  let sw = vw,
+    sh = vh;
+  if (vw / vh > frameAspect) sw = Math.round(vh * frameAspect);
+  else sh = Math.round(vw / frameAspect);
+  const sx = Math.round((vw - sw) / 2);
+  const sy = Math.round((vh - sh) / 2);
+
+  const scale = Math.min(1, SEGMENT_MAX_DIMENSION / Math.max(sw, sh));
+  canvas.width = Math.max(1, Math.round(sw * scale));
+  canvas.height = Math.max(1, Math.round(sh * scale));
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(photoVideoEl, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  return ctx;
+}
+
+/// AIで被写体を切り抜く。切り抜けた場合はtrue、使えなかった場合はfalseを返す。
+async function removeBackgroundWithAi(ctx, width, height, target) {
+  const segmenter = await loadSegmenter();
+  if (!segmenter) return false;
+
+  const result = segmenter.segment(ctx.canvas, { keypoint: { x: target.x, y: target.y } });
+  const masks = result.confidenceMasks || [];
+  if (masks.length === 0) {
+    if (result.close) result.close();
+    return false;
+  }
+
+  // 被写体側のマスクを選ぶ(タップ位置の値が最も大きいもの)
+  const maskWidth = masks[0].width;
+  const maskHeight = masks[0].height;
+  const tx = Math.min(maskWidth - 1, Math.floor(target.x * maskWidth));
+  const ty = Math.min(maskHeight - 1, Math.floor(target.y * maskHeight));
+  let confidence = null;
+  for (const mask of masks) {
+    const values = mask.getAsFloat32Array();
+    if (!confidence || values[ty * maskWidth + tx] > confidence[ty * maskWidth + tx]) confidence = values.slice();
+  }
+  if (result.close) result.close();
+
+  const alpha = refineMaskToAlpha(confidence, maskWidth, maskHeight, tx, ty);
+  if (!alpha) return false;
+
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  for (let y = 0; y < height; y++) {
+    const my = Math.min(maskHeight - 1, Math.floor((y * maskHeight) / height));
+    for (let x = 0; x < width; x++) {
+      const mx = Math.min(maskWidth - 1, Math.floor((x * maskWidth) / width));
+      data[(y * width + x) * 4 + 3] = alpha[my * maskWidth + mx];
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return true;
+}
+
+/// 確信度マスク(0〜1)を整えてアルファ値(0〜255)にする。
+/// 1. タップ位置を含むひとかたまり(なければ最大のかたまり)だけを残し、離れた誤検出を消す
+/// 2. かたまりの内側にある小さな穴を埋める
+/// 3. 境界は確信度に応じた半透明にして、なめらかにする
+/// 被写体がほとんど見つからない場合はnullを返す。
+function refineMaskToAlpha(confidence, width, height, tx, ty) {
+  const count = width * height;
+  const solid = new Uint8Array(count);
+  for (let i = 0; i < count; i++) solid[i] = confidence[i] >= 0.5 ? 1 : 0;
+
+  // 前景のかたまりにラベルを付ける
+  const label = new Int32Array(count);
+  const sizes = [0];
+  const queue = new Int32Array(count);
+  for (let start = 0; start < count; start++) {
+    if (!solid[start] || label[start]) continue;
+    const id = sizes.length;
+    let head = 0,
+      tail = 0,
+      size = 0;
+    queue[tail++] = start;
+    label[start] = id;
+    while (head < tail) {
+      const i = queue[head++];
+      size++;
+      const x = i % width;
+      if (x > 0 && solid[i - 1] && !label[i - 1]) { label[i - 1] = id; queue[tail++] = i - 1; }
+      if (x < width - 1 && solid[i + 1] && !label[i + 1]) { label[i + 1] = id; queue[tail++] = i + 1; }
+      if (i >= width && solid[i - width] && !label[i - width]) { label[i - width] = id; queue[tail++] = i - width; }
+      if (i < count - width && solid[i + width] && !label[i + width]) { label[i + width] = id; queue[tail++] = i + width; }
+    }
+    sizes.push(size);
+  }
+
+  let keep = label[ty * width + tx];
+  if (!keep) {
+    for (let id = 1; id < sizes.length; id++) if (!keep || sizes[id] > sizes[keep]) keep = id;
+  }
+  if (!keep || sizes[keep] < count * 0.005) return null;
+
+  // 残すかたまりの外側(画面の縁から届く背景)を調べ、届かない背景=内側の穴を見つける
+  const outside = new Uint8Array(count);
+  let head = 0,
+    tail = 0;
+  const pushOutside = (i) => {
+    if (!outside[i] && label[i] !== keep) { outside[i] = 1; queue[tail++] = i; }
+  };
+  for (let x = 0; x < width; x++) { pushOutside(x); pushOutside(count - width + x); }
+  for (let y = 0; y < height; y++) { pushOutside(y * width); pushOutside(y * width + width - 1); }
+  while (head < tail) {
+    const i = queue[head++];
+    const x = i % width;
+    if (x > 0) pushOutside(i - 1);
+    if (x < width - 1) pushOutside(i + 1);
+    if (i >= width) pushOutside(i - width);
+    if (i < count - width) pushOutside(i + width);
+  }
+  // 穴が被写体の2%未満なら埋める(折り紙のすき間など大きな穴はそのまま残す)
+  const holeLimit = sizes[keep] * 0.02;
+  const inHole = new Uint8Array(count);
+  for (let start = 0; start < count; start++) {
+    if (outside[start] || label[start] === keep || inHole[start]) continue;
+    const members = [];
+    head = 0;
+    tail = 0;
+    queue[tail++] = start;
+    inHole[start] = 1;
+    while (head < tail) {
+      const i = queue[head++];
+      members.push(i);
+      const x = i % width;
+      for (const n of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, i - width, i + width]) {
+        if (n < 0 || n >= count || outside[n] || label[n] === keep || inHole[n]) continue;
+        inHole[n] = 1;
+        queue[tail++] = n;
+      }
+    }
+    if (members.length < holeLimit) for (const i of members) label[i] = keep;
+  }
+
+  // 残すかたまりから2px以内だけを有効にし、その範囲で確信度をなめらかなアルファにする
+  const near = new Uint8Array(count);
+  for (let i = 0; i < count; i++) {
+    if (label[i] !== keep) continue;
+    const x = i % width;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx;
+        const n = i + dy * width + dx;
+        if (nx >= 0 && nx < width && n >= 0 && n < count) near[n] = 1;
+      }
+    }
+  }
+  const alpha = new Uint8ClampedArray(count);
+  for (let i = 0; i < count; i++) {
+    if (label[i] === keep) { alpha[i] = 255; continue; } // 被写体本体と、埋めた穴
+    if (!near[i]) continue;
+    const t = Math.min(1, Math.max(0, (confidence[i] - 0.2) / 0.3));
+    alpha[i] = Math.round(255 * t * t * (3 - 2 * t));
+  }
+  return alpha;
+}
+
+/// 撮影した写真の背景を切り抜く(単色〜比較的シンプルな背景を想定した簡易版。AIが使えない時の予備)。
 /// 画像の外周(四辺)から連結している「背景色に近い領域」だけを透明化するバケツ塗りつぶし方式。
 /// カード内部に背景と似た色があっても、外周とつながっていなければ消えないため、
 /// 本格的なAIセグメンテーションではないが、無地に近い背景であれば実用的な精度が出る。
@@ -924,21 +1147,33 @@ function resizeCanvasToDataUrl(sourceCanvas, maxDimension) {
   return resizedCanvas.toDataURL("image/png");
 }
 
-capturePhotoBtn.addEventListener("click", () => {
+capturePhotoBtn.addEventListener("click", async () => {
   if (!photoVideoEl.videoWidth) {
     setStatus("カメラの準備中です。少し待ってから撮影してください", "error");
     return;
   }
+  if (capturePhotoBtn.disabled) return;
 
-  const width = photoVideoEl.videoWidth;
-  const height = photoVideoEl.videoHeight;
-  photoCaptureCanvasEl.width = width;
-  photoCaptureCanvasEl.height = height;
+  const ctx = captureVisibleFrame(photoCaptureCanvasEl);
+  const width = photoCaptureCanvasEl.width;
+  const height = photoCaptureCanvasEl.height;
 
-  const ctx = photoCaptureCanvasEl.getContext("2d");
-  ctx.drawImage(photoVideoEl, 0, 0, width, height);
+  capturePhotoBtn.disabled = true;
+  photoVideoEl.pause(); // 撮影した瞬間の映像で止めて、処理中であることを分かりやすくする
+  setStatus("AIでキャラクターを切り抜いています…");
+  let usedAi = false;
+  try {
+    usedAi = await removeBackgroundWithAi(ctx, width, height, photoTarget);
+  } catch (e) {
+    logDebug("エラー(AIでの切り抜き。従来の方式で切り抜きます): " + e);
+  }
+  if (!usedAi) {
+    captureVisibleFrame(photoCaptureCanvasEl); // 一時停止中の同じ映像で撮り直してから従来の方式で切り抜く
+    removeBackground(ctx, width, height);
+  }
+  capturePhotoBtn.disabled = false;
+  photoVideoEl.play().catch(() => {});
 
-  removeBackground(ctx, width, height);
   const trimmedCanvas = trimTransparentMargins(photoCaptureCanvasEl);
 
   cutoutPreviewCanvasEl.width = trimmedCanvas.width;
@@ -949,11 +1184,16 @@ capturePhotoBtn.addEventListener("click", () => {
 
   photoVideoEl.style.display = "none";
   cutoutPreviewCanvasEl.style.display = "block";
+  photoTargetEl.style.display = "none";
   capturePhotoBtn.style.display = "none";
   retakePhotoBtn.style.display = "inline-block";
   usePhotoBtn.style.display = "inline-block";
 
-  setStatus("背景を切り抜きました。よければ「この写真を使う」を押してください");
+  setStatus(
+    usedAi
+      ? "背景を切り抜きました。よければ「この写真を使う」を押してください"
+      : "簡易モードで切り抜きました。うまくいかない時は無地の背景で撮り直してください"
+  );
 });
 
 retakePhotoBtn.addEventListener("click", () => {
@@ -961,11 +1201,12 @@ retakePhotoBtn.addEventListener("click", () => {
 
   photoVideoEl.style.display = "block";
   cutoutPreviewCanvasEl.style.display = "none";
+  photoTargetEl.style.display = "block";
   capturePhotoBtn.style.display = "inline-block";
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
 
-  setStatus("背景がなるべく無地になるようにキャラクターを置いて撮影してください");
+  setStatus("キャラクターをタップして選んでから撮影してください");
 });
 
 usePhotoBtn.addEventListener("click", () => {
@@ -1271,7 +1512,7 @@ registerBtn.addEventListener("click", () => {
 
   // Unity(バトルシーン)がQRコードをスキャンした際にcardIdだけでこのキャラクターを
   // 引けるよう、cardIdをキーにした最新スナップショットも別途保存しておく。
-  // (同じカードを登録し直した場合は上書きされ、常に最新の内容になる)
+  // (登録済みのカードは confirmOverwriteIfRegistered で弾くので、ここで上書きされることはない)
   db.ref("characterByCard/" + scannedCardData.cardId)
     .set(recordData)
     .catch((e) => {

@@ -793,6 +793,44 @@ h1 {
   filter: drop-shadow(0 0 4px rgba(247, 207, 112, 0.7));
 }
 
+/* 切り抜く被写体の目印(タップした位置に移動する小さな魔法陣) */
+.photo-target {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 3px solid var(--gold);
+  box-shadow: 0 0 0 2px rgba(9, 8, 15, 0.7), 0 0 14px rgba(247, 207, 112, 0.8), inset 0 0 10px rgba(140, 92, 242, 0.7);
+  transition: left 0.15s ease, top 0.15s ease;
+  animation: targetPulse 1.6s ease-in-out infinite;
+}
+
+.photo-target::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: var(--gold-light);
+}
+
+@keyframes targetPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+#photo-video {
+  cursor: crosshair;
+}
+
 .photo-frame video,
 .photo-frame canvas {
   position: absolute;
