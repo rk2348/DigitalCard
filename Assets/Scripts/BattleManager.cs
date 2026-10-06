@@ -330,18 +330,34 @@ public class BattleManager : MonoBehaviour
             BattleTurnSync.TurnChoices choices = default;
             bool resolved = false;
             StartCoroutine(battleTurnSync.WaitForChoices(attackerSlot, defenderSlot, c => { choices = c; resolved = true; }));
+            string offlineNotice = null;
             while (!resolved)
             {
                 if (battleTurnSync.IsWaitingForChoices)
                 {
                     hud.SetCountdown(battleTurnSync.SecondsRemaining, battleTurnSync.ChoiceTimeoutSeconds);
                     SetRoles(attackerIsPlayer1, battleTurnSync.AttackerChosen, battleTurnSync.DefenderChosen);
+
+                    // 通信が切れている側がいれば知らせる(戻ってくれば元の案内に戻す)
+                    string notice = OfflineNotice(battleTurnSync.IsDisconnected(attackerSlot) ? attacker : null,
+                        battleTurnSync.IsDisconnected(defenderSlot) ? defender : null);
+                    if (notice != offlineNotice)
+                    {
+                        offlineNotice = notice;
+                        hud.SetMessage(notice ?? $"{attacker.characterName} の攻撃！　スマホで「強・普・弱」を選んでください");
+                    }
                 }
                 yield return null;
             }
             hud.SetCountdown(-1f, 0f);
-            attackLevel = choices.attacker;
-            defenseLevel = choices.defender;
+            attackLevel = choices.attackerDisconnected ? ChooseAiLevel(attacker, aiSpecialBias) : choices.attacker;
+            defenseLevel = choices.defenderDisconnected ? ChooseAiLevel(defender, 0f) : choices.defender;
+            if (choices.attackerDisconnected || choices.defenderDisconnected)
+            {
+                SetRoles(attackerIsPlayer1, true, true);
+                hud.SetMessage(OfflineNotice(choices.attackerDisconnected ? attacker : null, choices.defenderDisconnected ? defender : null));
+                yield return new WaitForSeconds(0.8f);
+            }
 
             // 時間切れの記録と不戦敗の判定
             bool player1TimedOut = attackerIsPlayer1 ? choices.attackerTimedOut : choices.defenderTimedOut;
@@ -550,6 +566,14 @@ public class BattleManager : MonoBehaviour
     }
 
     /// <summary>CPUの選択。specialBiasの確率で必殺技レベルを狙い、それ以外は3択の均等ランダム。</summary>
+    /// <summary>通信が切れて自動操作になっている側の案内文。どちらも接続中ならnull。</summary>
+    private static string OfflineNotice(CharacterStats offlineA, CharacterStats offlineB)
+    {
+        if (offlineA != null && offlineB != null) return "両プレイヤーの通信が切れたため、自動で戦います";
+        CharacterStats offline = offlineA ?? offlineB;
+        return offline == null ? null : $"{offline.characterName} の通信が切れたため、自動で戦います";
+    }
+
     private static AttackLevel ChooseAiLevel(CharacterStats character, float specialBias)
     {
         if (specialBias > 0f && Random.value < specialBias) return character.specialLevel;

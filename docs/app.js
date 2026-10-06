@@ -4,6 +4,10 @@
 // 登録内容は Firebase Realtime Database の /characterByCard/{cardId} に保存し、
 // 対戦時は /tables/{卓ID}/battleSlots に参加して、/tables/{卓ID}/activeBattle で会場PC(Unity)と同期する。
 
+// アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
+const APP_VERSION = "0.1.0";
+document.getElementById("app-version").textContent = "ver " + APP_VERSION;
+
 const firebaseConfig = {
   apiKey: "AIzaSyAQBqecVE538sEoEnB1oJk0-mVCaE2mKL0",
   authDomain: "digitalcard-b825d.firebaseapp.com",
@@ -154,6 +158,10 @@ const capturePhotoBtn = document.getElementById("capture-photo-btn");
 const retakePhotoBtn = document.getElementById("retake-photo-btn");
 const usePhotoBtn = document.getElementById("use-photo-btn");
 const skipPhotoBtn = document.getElementById("skip-photo-btn");
+const registeredOverlayEl = document.getElementById("registered-overlay");
+const registeredNameEl = document.getElementById("registered-name");
+const registeredPhotoEl = document.getElementById("registered-photo");
+const registeredCloseBtn = document.getElementById("registered-close-btn");
 const photoFrameEl = document.getElementById("photo-frame");
 const photoTargetEl = document.getElementById("photo-target");
 const cardCharacterCutoutEl = document.getElementById("card-character-cutout");
@@ -198,6 +206,7 @@ const devCpuBtn = document.getElementById("dev-cpu-btn");
 const battleWaitCpuBtn = document.getElementById("battle-wait-cpu-btn");
 
 let scanner = null;
+let scannerStartPromise = null; // カメラ起動中のPromise(起動が終わる前に止めないため)
 let isSending = false; // Firebaseへの書き込み〜結果待ちの間（多重送信防止）
 let isAwaitingName = false; // QR読み取り済み・名前入力/結果待ち（この間はスキャン結果を無視する）
 let scannedCardData = null; // QRから読み取ったカード情報(cardId, seedなど)
@@ -265,7 +274,7 @@ function logDebug(text) {
 }
 
 function init() {
-  logDebug("ページを読み込みました。");
+  logDebug(`ページを読み込みました。(ver ${APP_VERSION})`);
 
   try {
     firebase.initializeApp(firebaseConfig);
@@ -311,7 +320,77 @@ function init() {
   // 匿名認証でサインインする(Database Rulesで書き込み元を確認するため)。
   // 匿名認証が無効な場合もエラーにはせず、そのまま利用できるようにする。
   setStatus("接続しています...");
-  signInAnonymously().finally(() => goHome());
+  signInAnonymously().finally(() => {
+    watchDisplayPresence();
+    goHome();
+  });
+}
+
+// ==================== PC(Unity)の画面が開いているかの確認 ====================
+// Unity(DisplayPresence.cs)は tables/{卓ID}/display/heartbeat に数秒ごとにサーバー時刻を書き込む。
+// その時刻が古い間は「PCの画面が開いていない」とみなし、QRコードを読み取らせない。
+const DISPLAY_STALE_MS = 15000;
+
+let displayHeartbeatAt = 0; // 最後に受け取ったUnityの生存信号(サーバー時刻のミリ秒)
+let serverTimeOffset = 0; // サーバー時刻 - この端末の時刻
+let displayCheckUnavailable = false; // 権限などで確認できない時は、読み取りを止めないようにする
+let displayOnline = null; // null = まだ確認中
+let scanPromptText = ""; // 読み取り中に表示する案内(PCが戻った時に表示し直す)
+
+function watchDisplayPresence() {
+  db.ref(".info/serverTimeOffset").on("value", (snapshot) => {
+    serverTimeOffset = snapshot.val() || 0;
+  });
+  db.ref(`${TABLE_PATH}/display/heartbeat`).on(
+    "value",
+    (snapshot) => {
+      displayHeartbeatAt = snapshot.val() || 0;
+      updateDisplayOnline();
+    },
+    (e) => {
+      logDebug("PC画面の確認ができないため、確認せずに読み取ります: " + e);
+      displayCheckUnavailable = true;
+      updateDisplayOnline();
+    }
+  );
+  setInterval(updateDisplayOnline, 2000); // 信号が途絶えたことに気づくための定期確認
+}
+
+function isDisplayOnline() {
+  if (displayCheckUnavailable) return true;
+  return displayHeartbeatAt > 0 && Date.now() + serverTimeOffset - displayHeartbeatAt < DISPLAY_STALE_MS;
+}
+
+function updateDisplayOnline() {
+  const online = isDisplayOnline();
+  if (online === displayOnline) return;
+  displayOnline = online;
+  logDebug(online ? "PCの画面が開いています" : "PCの画面が開いていません");
+  refreshScannerGate();
+}
+
+/// QR読み取り画面を表示中なら、PCの画面が開いている時だけカメラを動かす。
+function refreshScannerGate() {
+  const scanning = (appMode === "create" || appMode === "battle") && readerEl.style.display !== "none" && !isAwaitingName;
+  if (!scanning) return;
+  if (displayOnline === null) {
+    setStatus("PCの画面を確認しています...");
+    return;
+  }
+  if (displayOnline) {
+    setStatus(scanPromptText);
+    startScanner();
+  } else {
+    stopScanner();
+    setStatus("PCの対戦画面が開いていないため、QRコードを読み取れません。画面が開くと自動で読み取りを始めます", "error");
+  }
+}
+
+/// QR読み取り画面を表示する(PCの画面が開いていなければ、開くまで読み取りを始めない)。
+function beginScanning(promptText) {
+  scanPromptText = promptText;
+  showReader();
+  refreshScannerGate();
 }
 
 function signInAnonymously() {
@@ -334,9 +413,7 @@ function currentUid() {
 function startCreateMode() {
   appMode = "create";
   homeSectionEl.style.display = "none";
-  showReader();
-  setStatus("キャラクターにするカードのQRコードをカメラにかざしてください");
-  startScanner();
+  beginScanning("キャラクターにするカードのQRコードをカメラにかざしてください");
 }
 
 /// 対戦開始モードを開始する: ホームを隠してQRリーダーを表示する。
@@ -344,9 +421,7 @@ function startCreateMode() {
 function startBattleMode() {
   appMode = "battle";
   homeSectionEl.style.display = "none";
-  showReader();
-  setStatus("対戦するキャラクターのカードのQRコードをカメラにかざしてください");
-  startScanner();
+  beginScanning("対戦するキャラクターのカードのQRコードをカメラにかざしてください");
 }
 
 function showReader() {
@@ -362,6 +437,8 @@ function hideReader() {
 /// 全セクションを閉じてホーム画面に戻す。実行中のスキャナー・対戦キュー監視も停止する。
 function goHome() {
   appMode = null;
+  clearTimeout(alreadyRegisteredTimer);
+  registeredOverlayEl.classList.remove("show");
   isSending = false;
   isAwaitingName = false;
   scannedCardData = null;
@@ -395,9 +472,12 @@ function goHome() {
 function stopScanner() {
   if (!scanner) return;
   const runningScanner = scanner;
+  const starting = scannerStartPromise || Promise.resolve();
   scanner = null;
-  runningScanner
-    .stop()
+  scannerStartPromise = null;
+  // カメラの起動中に止めるとライブラリが例外を出すため、起動が終わってから止める
+  starting
+    .then(() => runningScanner.stop())
     .then(() => runningScanner.clear())
     .catch((e) => logDebug("エラー(スキャナー停止): " + e));
 }
@@ -443,7 +523,8 @@ function startScanner() {
 
   logDebug("カメラの起動を試みます...");
 
-  scanner
+  const startingScanner = scanner;
+  scannerStartPromise = scanner
     .start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
     .then(() => {
       logDebug("カメラの起動に成功しました。");
@@ -451,7 +532,7 @@ function startScanner() {
     .catch((err) => {
       setStatus("カメラを起動できませんでした: " + err, "error");
       logDebug("エラー(カメラ起動): " + err);
-      scanner = null; // 失敗したので再度ボタンを押せば再試行できるようにする
+      if (scanner === startingScanner) scanner = null; // 失敗したので再度ボタンを押せば再試行できるようにする
     });
 }
 
@@ -462,6 +543,11 @@ function onScanFailure() {
 function onScanSuccess(decodedText) {
   // 送信中、または既に読み取り済みで名前入力/結果待ちの間は、続けて読み取っても無視する
   if (isSending || isAwaitingName) return;
+  // PCの画面が開いていない間は読み取らない
+  if (!isDisplayOnline()) {
+    refreshScannerGate();
+    return;
+  }
 
   logDebug("QRコードを読み取りました: " + decodedText);
 
@@ -486,6 +572,42 @@ function onScanSuccess(decodedText) {
   confirmOverwriteIfRegistered(cardData);
 }
 
+const ALREADY_REGISTERED_AUTO_CLOSE_MS = 6000;
+let alreadyRegisteredTimer = null;
+
+/// 「既に登録済みです」を画面いっぱいに大きく表示する。ボタンか時間経過で閉じる。
+function showAlreadyRegistered(record) {
+  registeredNameEl.textContent = record.characterName;
+  if (record.photoDataUrl) {
+    registeredPhotoEl.src = record.photoDataUrl;
+    registeredPhotoEl.style.display = "block";
+  } else {
+    registeredPhotoEl.removeAttribute("src");
+    registeredPhotoEl.style.display = "none";
+  }
+  registeredOverlayEl.classList.remove("show");
+  void registeredOverlayEl.offsetWidth; // 連続で表示した時もアニメーションをやり直す
+  registeredOverlayEl.classList.add("show");
+  setStatus("このカードは既に登録済みです。別のカードを読み取ってください", "error");
+  if (navigator.vibrate) navigator.vibrate([120, 80, 120]);
+
+  clearTimeout(alreadyRegisteredTimer);
+  alreadyRegisteredTimer = setTimeout(hideAlreadyRegistered, ALREADY_REGISTERED_AUTO_CLOSE_MS);
+}
+
+function hideAlreadyRegistered() {
+  clearTimeout(alreadyRegisteredTimer);
+  alreadyRegisteredTimer = null;
+  if (!registeredOverlayEl.classList.contains("show")) return;
+  registeredOverlayEl.classList.remove("show");
+  isAwaitingName = false;
+  // 同じカードがまだカメラに映っていても、すぐにまた表示しないよう少しだけ無視する
+  rejectedCardUntil = Date.now() + 2500;
+  if (appMode === "create") setStatus("キャラクターにするカードのQRコードをカメラにかざしてください");
+}
+
+registeredCloseBtn.addEventListener("click", hideAlreadyRegistered);
+
 /// 作成モードで読み取ったカードが登録済みなら「既に登録済みです」と表示して登録させない。
 /// (上書きできると、別の人のキャラクターが消えてしまうため)
 function confirmOverwriteIfRegistered(cardData) {
@@ -500,10 +622,8 @@ function confirmOverwriteIfRegistered(cardData) {
     .then((snapshot) => {
       const existing = snapshot.val();
       if (existing && existing.characterName) {
-        isAwaitingName = false;
         rejectedCardId = cardData.cardId;
-        rejectedCardUntil = Date.now() + 4000;
-        setStatus(`このカードは既に登録済みです(「${existing.characterName}」)。別のカードを読み取ってください`, "error");
+        showAlreadyRegistered(existing); // 閉じるまで読み取りは止めたまま(isAwaitingName = true)
         return;
       }
       scannedCardData = cardData;
@@ -662,8 +782,7 @@ function resetToScanning() {
   photoCaptureSectionEl.style.display = "none";
   nameInputSectionEl.style.display = "none";
   statusDisplaySectionEl.style.display = "none";
-  showReader();
-  setStatus("キャラクターにするカードのQRコードをカメラにかざしてください");
+  beginScanning("キャラクターにするカードのQRコードをカメラにかざしてください");
 }
 
 /// Unityから返ってきたキャラクターステータスを、カード開封のステージ演出とともに表示する
@@ -1300,6 +1419,8 @@ function startBattleTurnListener(mySlot) {
   currentBattleTurnRole = null;
   submittedBattleTurnNumber = -1;
 
+  startBattlePresence(mySlot);
+
   battleWaitSectionEl.style.display = "none";
   battleTurnSectionEl.style.display = "block";
   battleTurnResultEl.style.display = "none";
@@ -1431,7 +1552,41 @@ function detachBattleTurnListener() {
   battleTurnListenerRef = null;
   battleTurnListenerHandler = null;
   stopTurnCountdown();
+  stopBattlePresence();
 }
+
+// ==================== 対戦中の生存信号 ====================
+// 対戦中は activeBattle/presence/{自分の枠} に数秒ごとにサーバー時刻を書き込む。
+// 通信不良や画面ロックで信号が数秒途絶えると、Unity側がこのプレイヤーを自動で操作する。
+// 信号が戻れば、またこのスマホで選べるようになる。
+const BATTLE_PRESENCE_INTERVAL_MS = 2000;
+let battlePresenceTimer = null;
+let battlePresenceSlot = null;
+
+function sendBattlePresence() {
+  if (!battlePresenceSlot) return;
+  db.ref(`${TABLE_PATH}/activeBattle/presence/${battlePresenceSlot}`)
+    .set(firebase.database.ServerValue.TIMESTAMP)
+    .catch((e) => logDebug("エラー(対戦中の生存信号): " + e));
+}
+
+function startBattlePresence(slot) {
+  stopBattlePresence();
+  battlePresenceSlot = slot;
+  sendBattlePresence();
+  battlePresenceTimer = setInterval(sendBattlePresence, BATTLE_PRESENCE_INTERVAL_MS);
+}
+
+function stopBattlePresence() {
+  if (battlePresenceTimer) clearInterval(battlePresenceTimer);
+  battlePresenceTimer = null;
+  battlePresenceSlot = null;
+}
+
+// 画面ロックやアプリ切り替えから戻ったら、すぐに「戻ってきた」ことを伝える
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") sendBattlePresence();
+});
 
 function setBattleTurnPrompt(text) {
   battleTurnPromptEl.textContent = text;

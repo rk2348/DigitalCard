@@ -1,0 +1,52 @@
+{
+  "rules": {
+    ".read": "auth != null && root.child('admins').child(auth.uid).val() === true",
+    ".write": "auth != null && root.child('admins').child(auth.uid).val() === true",
+
+    "characters": {
+      "$pushId": {
+        ".write": "auth != null && !data.exists()",
+        ".validate": "newData.hasChildren(['cardId', 'seed', 'characterName']) && !newData.hasChild('photoDataUrl')"
+      }
+    },
+
+    "characterByCard": {
+      "$cardId": {
+        ".read": "auth != null",
+        ".write": "auth != null && newData.exists()",
+        ".validate": "newData.hasChildren(['cardId', 'seed', 'characterName']) && newData.child('cardId').val() === $cardId && newData.child('characterName').isString() && newData.child('characterName').val().length <= 21 && (!newData.hasChild('photoDataUrl') || (newData.child('photoDataUrl').isString() && newData.child('photoDataUrl').val().length < 1500000))"
+      }
+    },
+
+    "tables": {
+      "$tableId": {
+        "battleSlots": {
+          ".read": "auth != null",
+          "$slot": {
+            ".write": "auth != null && ($slot === 'player1' || $slot === 'player2') && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.exists() && data.child('uid').val() === auth.uid && !newData.exists()))"
+          }
+        },
+        "display": {
+          ".read": "auth != null"
+        },
+        "activeBattle": {
+          ".read": "auth != null",
+          "presence": {
+            "$slot": {
+              ".write": "auth != null && ($slot === 'player1' || $slot === 'player2') && auth.uid === root.child('tables').child($tableId).child('activeBattle').child($slot + 'Uid').val()",
+              ".validate": "newData.isNumber()"
+            }
+          },
+          "choices": {
+            "$turn": {
+              "$role": {
+                ".write": "auth != null && !data.exists() && root.child('tables').child($tableId).child('activeBattle/status').val() === 'choosing' && $turn === root.child('tables').child($tableId).child('activeBattle/turnKey').val() && (($role === 'attacker' && auth.uid === root.child('tables').child($tableId).child('activeBattle').child(root.child('tables').child($tableId).child('activeBattle/attackerSlot').val() + 'Uid').val()) || ($role === 'defender' && auth.uid === root.child('tables').child($tableId).child('activeBattle').child(root.child('tables').child($tableId).child('activeBattle/defenderSlot').val() + 'Uid').val()))",
+                ".validate": "newData.isString() && newData.val().matches(/^(Strong|Normal|Weak)$/)"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

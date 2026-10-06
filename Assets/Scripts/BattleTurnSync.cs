@@ -17,6 +17,9 @@ using UnityEngine.Networking;
 /// ・スマホは activeBattle/choices/{turn}/attacker または defender に選択を書き込む。
 ///   ターン番号ごとに書き込み先が分かれるため、遅れて届いた書き込みが次のターンに混ざることはない。
 /// ・制限時間(timeoutSeconds)内に選ばれなかった側は「普」を選んだものとして扱う。
+/// ・スマホは対戦中、activeBattle/presence/{slot} に数秒ごとに生存信号(サーバー時刻)を書き込む。
+///   信号が disconnectGraceSeconds 以上途絶えた側は「通信が切れた」とみなし、制限時間を待たずに
+///   BattleManager がその側を自動で操作する(信号が戻れば、またスマホで選べるようになる)。
 ///
 /// 【セットアップ方法】
 /// 1. バトルシーンに空のGameObjectを作成し、このスクリプトをアタッチ
@@ -32,6 +35,9 @@ public class BattleTurnSync : MonoBehaviour
         public AttackLevel defender;
         public bool attackerTimedOut;
         public bool defenderTimedOut;
+        /// <summary>通信が切れていて選べなかった(自動で操作する)側。</summary>
+        public bool attackerDisconnected;
+        public bool defenderDisconnected;
     }
 
     [Tooltip("ポーリング間隔（秒）")]
@@ -40,9 +46,24 @@ public class BattleTurnSync : MonoBehaviour
     [Tooltip("1回の選択の制限時間（秒）。過ぎたら未選択の側は「普」を選んだものとして扱う")]
     [SerializeField] private float choiceTimeoutSeconds = 30f;
 
+    [Tooltip("スマホの生存信号がこの秒数途絶えたら通信切れとみなし、自動で操作する")]
+    [SerializeField] private float disconnectGraceSeconds = 6f;
+
     private int turnNumber;
     private bool matchInProgress;
     private float choiceDeadline;
+
+    /// <summary>スロットごとの生存信号の受信状況。</summary>
+    private sealed class PresenceState
+    {
+        public long lastValue;
+        public float lastChangeTime;
+        public bool seen; // 一度でも信号を受け取ったか(古い版のスマホは信号を送らないため、その場合は通信切れ扱いにしない)
+    }
+
+    private readonly PresenceState player1Presence = new PresenceState();
+    private readonly PresenceState player2Presence = new PresenceState();
+    private Coroutine presenceRoutine;
 
     /// <summary>選択を待っている最中か。</summary>
     public bool IsWaitingForChoices { get; private set; }
@@ -65,11 +86,70 @@ public class BattleTurnSync : MonoBehaviour
         public string defender;
     }
 
+    [Serializable]
+    private class PresenceRecord
+    {
+        public long player1;
+        public long player2;
+    }
+
     /// <summary>試合の開始(BattleQueueIntakeがactiveBattleを初期化した後)に呼ぶ。</summary>
     public void BeginMatch()
     {
         turnNumber = 0;
         matchInProgress = true;
+        foreach (PresenceState state in new[] { player1Presence, player2Presence })
+        {
+            state.lastValue = 0;
+            state.lastChangeTime = Time.time;
+            state.seen = false;
+        }
+        if (presenceRoutine != null) StopCoroutine(presenceRoutine);
+        presenceRoutine = StartCoroutine(PollPresence());
+    }
+
+    /// <summary>そのスロット("player1" / "player2")のスマホの通信が切れているか。</summary>
+    public bool IsDisconnected(string slot)
+    {
+        PresenceState state = slot == "player1" ? player1Presence : player2Presence;
+        return state.seen && Time.time - state.lastChangeTime > disconnectGraceSeconds;
+    }
+
+    /// <summary>試合中ずっと、両スマホの生存信号を見張る(演出中に途切れても気づけるように、ターンとは独立して回す)。</summary>
+    private IEnumerator PollPresence()
+    {
+        WaitForSeconds wait = new WaitForSeconds(pollIntervalSeconds);
+        while (matchInProgress)
+        {
+            yield return FirebaseRest.Get($"{BattlePath}/presence", req =>
+            {
+                if (req.result != UnityWebRequest.Result.Success) return; // こちらの通信不良でスマホを切断扱いにしないよう、失敗時は何もしない
+                string json = req.downloadHandler.text;
+                if (string.IsNullOrEmpty(json) || json == "null") return;
+                PresenceRecord record;
+                try
+                {
+                    record = JsonUtility.FromJson<PresenceRecord>(json);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("BattleTurnSync: 生存信号のパースに失敗しました: " + e.Message);
+                    return;
+                }
+                Observe(player1Presence, record.player1);
+                Observe(player2Presence, record.player2);
+            });
+            yield return wait;
+        }
+        presenceRoutine = null;
+    }
+
+    private static void Observe(PresenceState state, long value)
+    {
+        if (value == 0 || value == state.lastValue) return;
+        state.lastValue = value;
+        state.lastChangeTime = Time.time;
+        state.seen = true;
     }
 
     /// <summary>
@@ -126,17 +206,24 @@ public class BattleTurnSync : MonoBehaviour
 
             AttackerChosen = !string.IsNullOrEmpty(latest?.attacker);
             DefenderChosen = !string.IsNullOrEmpty(latest?.defender);
-            if (AttackerChosen && DefenderChosen)
+            // 選び終えたか、通信が切れて(数秒待っても戻らず)自動操作になる側だけになったら締め切る
+            if ((AttackerChosen || IsDisconnected(attackerSlot)) && (DefenderChosen || IsDisconnected(defenderSlot)))
             {
                 break;
             }
         }
         IsWaitingForChoices = false;
 
+        bool attackerMissing = string.IsNullOrEmpty(latest?.attacker);
+        bool defenderMissing = string.IsNullOrEmpty(latest?.defender);
+        bool attackerOffline = attackerMissing && IsDisconnected(attackerSlot);
+        bool defenderOffline = defenderMissing && IsDisconnected(defenderSlot);
         TurnChoices result = new TurnChoices
         {
-            attackerTimedOut = string.IsNullOrEmpty(latest?.attacker),
-            defenderTimedOut = string.IsNullOrEmpty(latest?.defender),
+            attackerTimedOut = attackerMissing && !attackerOffline,
+            defenderTimedOut = defenderMissing && !defenderOffline,
+            attackerDisconnected = attackerOffline,
+            defenderDisconnected = defenderOffline,
         };
         result.attacker = ParseLevel(latest?.attacker);
         result.defender = ParseLevel(latest?.defender);
