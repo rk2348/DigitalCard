@@ -774,7 +774,7 @@ function showPhotoCapture(cardData) {
   hideReader();
   nameInputSectionEl.style.display = "none";
   photoCaptureSectionEl.style.display = "block";
-  setStatus("キャラクターをタップして選んでから撮影してください");
+  setStatus("キャラクター全体を指でドラッグして四角く囲んでから撮影してください");
 
   startPhotoCamera();
   loadSegmenter(); // 撮影までにAIモデルを読み込んでおく
@@ -1411,12 +1411,12 @@ retakePhotoBtn.addEventListener("click", () => {
 
   photoVideoEl.style.display = "block";
   cutoutPreviewCanvasEl.style.display = "none";
-  photoTargetEl.style.display = "block";
+  photoTargetEl.style.display = "none";
   capturePhotoBtn.style.display = "inline-block";
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
 
-  setStatus("キャラクターをタップして選んでから撮影してください");
+  setStatus("キャラクター全体を指でドラッグして四角く囲んでから撮影してください");
 });
 
 usePhotoBtn.addEventListener("click", () => {
