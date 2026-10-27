@@ -6,7 +6,7 @@
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
 // 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
-const APP_VERSION = "0.7.2";
+const APP_VERSION = "0.7.3";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {
@@ -480,7 +480,7 @@ function stopScanner() {
   scanner = null;
   scannerStartPromise = null;
   // カメラの起動中に止めるとライブラリが例外を出すため、起動が終わってから止める
-  starting
+  return starting
     .then(() => runningScanner.stop())
     .then(() => runningScanner.clear())
     .catch((e) => logDebug("エラー(スキャナー停止): " + e));
@@ -757,7 +757,7 @@ function setBattleStatus(text, type = "info") {
 }
 
 /// カード読み取り直後、実物を撮影して背景を切り抜く画面を表示する
-function showPhotoCapture(cardData) {
+async function showPhotoCapture(cardData) {
   isAwaitingName = true;
 
   photoCardIdEl.textContent = cardData.cardId;
@@ -776,6 +776,9 @@ function showPhotoCapture(cardData) {
   photoCaptureSectionEl.style.display = "block";
   setStatus("\u307e\u305a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u3092\u64ae\u5f71\u3057\u3066\u304f\u3060\u3055\u3044");
 
+  // Mobile browsers may reject a second camera stream until the QR reader releases it.
+  await stopScanner();
+  if (photoCaptureSectionEl.style.display === "none" || !isAwaitingName) return;
   startPhotoCamera();
   loadSegmenter(); // 撮影までにAIモデルを読み込んでおく
 }
@@ -1455,41 +1458,33 @@ skipPhotoBtn.addEventListener("click", () => {
 /// PC(Unity)側は一切QRコードを読み取らず、この2枠が両方埋まるのをポーリングで
 /// 待つだけの設計にしている。2台のスマホがほぼ同時に登録した場合の競合を避けるため、
 /// 単純なset()ではなくtransaction()で「今空いているか」をアトミックに確認してから書き込む。
-function joinBattleQueue(recordData, onJoined = onJoinedBattleQueue, onFull = null) {
-  const slot1Ref = db.ref(`${TABLE_PATH}/battleSlots/player1`);
-  const slot2Ref = db.ref(`${TABLE_PATH}/battleSlots/player2`);
-
-  slot1Ref.transaction(
-    (current) => (current === null ? recordData : undefined), // undefinedを返すと競合とみなされ書き込まれない
-    (error, committed) => {
-      if (error) {
-        logDebug("エラー(battleSlots/player1のtransaction): " + error);
-        return;
+async function joinBattleQueue(recordData, onJoined = onJoinedBattleQueue, onFull = null) {
+  try {
+    if (!recordData.uid) throw new Error("認証できていません。ページを再読み込みしてからお試しください");
+    // Read before transacting: a fresh client's local null is not proof that a slot is empty.
+    // Trying to overwrite an occupied slot is denied by the ownership rules.
+    const snapshot = await db.ref(`${TABLE_PATH}/battleSlots`).once("value");
+    const slots = snapshot.val() || {};
+    for (const slot of ["player1", "player2"]) {
+      if (slots[slot]) continue;
+      try {
+        const result = await db.ref(`${TABLE_PATH}/battleSlots/${slot}`).transaction(
+          current => current === null ? recordData : undefined, undefined, false
+        );
+        if (result.committed) { onJoined(slot); return; }
+      } catch (error) {
+        // A concurrent entrant may have taken this slot. Try the other slot only in that case.
+        const latest = await db.ref(`${TABLE_PATH}/battleSlots/${slot}`).once("value");
+        if (!latest.exists()) throw error;
       }
-      if (committed) {
-        onJoined("player1");
-        return;
-      }
-
-      // player1が既に埋まっていた場合はplayer2を試す
-      slot2Ref.transaction(
-        (current) => (current === null ? recordData : undefined),
-        (error2, committed2) => {
-          if (error2) {
-            logDebug("エラー(battleSlots/player2のtransaction): " + error2);
-            return;
-          }
-          if (committed2) {
-            onJoined("player2");
-          } else if (onFull) {
-            onFull();
-          } else {
-            setBattleStatus("現在、対戦の順番待ちが満席です。少し待ってからもう一度お試しください", "error");
-          }
-        }
-      );
     }
-  );
+    if (onFull) onFull();
+    else setBattleStatus("現在、対戦の順番待ちが満席です。ホームに戻ってからもう一度お試しください", "error");
+  } catch (error) {
+    logDebug("対戦エントリー失敗: " + error);
+    setBattleStatus("対戦に参加できませんでした: " + (error.message || error.code || error) + "。ホームに戻って再度お試しください", "error");
+    if (onFull) onFull();
+  }
 }
 
 /// 対戦キューへの参加に成功した後、相手が揃うまでの状況をリアルタイムに表示する。
