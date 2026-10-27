@@ -6,7 +6,7 @@
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
 // 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
-const APP_VERSION = "0.7.1";
+const APP_VERSION = "0.7.2";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {
@@ -1115,7 +1115,7 @@ function captureVisibleFrame(canvas) {
 }
 
 /// AIで被写体を切り抜く。切り抜けた場合はtrue、使えなかった場合はfalseを返す。
-async function removeBackgroundWithAi(ctx, width, height, target) {
+async function removeBackgroundWithAi(ctx, width, height, target, selectionMask = null) {
   const segmenter = await loadSegmenter();
   if (!segmenter) return false;
 
@@ -1138,129 +1138,81 @@ async function removeBackgroundWithAi(ctx, width, height, target) {
   }
   if (result.close) result.close();
 
+  // Apply the actual lasso before connected-component analysis, not just after it.
+  if (selectionMask) {
+    const roi=document.createElement("canvas");roi.width=maskWidth;roi.height=maskHeight;
+    const rc=roi.getContext("2d");rc.drawImage(selectionMask,0,0,maskWidth,maskHeight);
+    const pixels=rc.getImageData(0,0,maskWidth,maskHeight).data;
+    for(let i=0;i<confidence.length;i++) confidence[i]*=pixels[i*4+3]/255;
+  }
   const alpha = refineMaskToAlpha(confidence, maskWidth, maskHeight, tx, ty);
   if (!alpha) return false;
 
-  const imageData = ctx.getImageData(0, 0, width, height);
-  const data = imageData.data;
-  for (let y = 0; y < height; y++) {
-    const my = Math.min(maskHeight - 1, Math.floor((y * maskHeight) / height));
-    for (let x = 0; x < width; x++) {
-      const mx = Math.min(maskWidth - 1, Math.floor((x * maskWidth) / width));
-      data[(y * width + x) * 4 + 3] = alpha[my * maskWidth + mx];
-    }
-  }
-  ctx.putImageData(imageData, 0, 0);
+  // Smoothly resample the low-resolution mask instead of copying nearest pixels.
+  const alphaCanvas=document.createElement("canvas");
+  alphaCanvas.width=maskWidth;alphaCanvas.height=maskHeight;
+  const ac=alphaCanvas.getContext("2d"), image=ac.createImageData(maskWidth,maskHeight);
+  for(let i=0;i<alpha.length;i++) {image.data[i*4]=255;image.data[i*4+1]=255;image.data[i*4+2]=255;image.data[i*4+3]=alpha[i];}
+  ac.putImageData(image,0,0);
+  ctx.save();
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
+  ctx.globalCompositeOperation="destination-in";
+  ctx.drawImage(alphaCanvas,0,0,width,height);
+  ctx.restore();
   return true;
 }
 
 /// 確信度マスク(0〜1)を整えてアルファ値(0〜255)にする。
-/// 1. タップ位置を含むひとかたまり(なければ最大のかたまり)だけを残し、離れた誤検出を消す
-/// 2. かたまりの内側にある小さな穴を埋める
-/// 3. 境界は確信度に応じた半透明にして、なめらかにする
-/// 被写体がほとんど見つからない場合はnullを返す。
+// Hysteresis keeps uncertain thin edges only when connected to confident foreground.
+// Eight-way connectivity preserves diagonal paper folds and narrow limbs.
 function refineMaskToAlpha(confidence, width, height, tx, ty) {
-  const count = width * height;
-  const solid = new Uint8Array(count);
-  for (let i = 0; i < count; i++) solid[i] = confidence[i] >= 0.5 ? 1 : 0;
-
-  // 前景のかたまりにラベルを付ける
-  const label = new Int32Array(count);
-  const sizes = [0];
-  const queue = new Int32Array(count);
-  for (let start = 0; start < count; start++) {
-    if (!solid[start] || label[start]) continue;
-    const id = sizes.length;
-    let head = 0,
-      tail = 0,
-      size = 0;
-    queue[tail++] = start;
-    label[start] = id;
-    while (head < tail) {
-      const i = queue[head++];
-      size++;
-      const x = i % width;
-      if (x > 0 && solid[i - 1] && !label[i - 1]) { label[i - 1] = id; queue[tail++] = i - 1; }
-      if (x < width - 1 && solid[i + 1] && !label[i + 1]) { label[i + 1] = id; queue[tail++] = i + 1; }
-      if (i >= width && solid[i - width] && !label[i - width]) { label[i - width] = id; queue[tail++] = i - width; }
-      if (i < count - width && solid[i + width] && !label[i + width]) { label[i + width] = id; queue[tail++] = i + width; }
-    }
-    sizes.push(size);
-  }
-
-  let keep = label[ty * width + tx];
-  if (!keep) {
-    for (let id = 1; id < sizes.length; id++) if (!keep || sizes[id] > sizes[keep]) keep = id;
-  }
-  if (!keep || sizes[keep] < count * 0.005) return null;
-
-  // 残すかたまりの外側(画面の縁から届く背景)を調べ、届かない背景=内側の穴を見つける
-  const outside = new Uint8Array(count);
-  let head = 0,
-    tail = 0;
-  const pushOutside = (i) => {
-    if (!outside[i] && label[i] !== keep) { outside[i] = 1; queue[tail++] = i; }
-  };
-  for (let x = 0; x < width; x++) { pushOutside(x); pushOutside(count - width + x); }
-  for (let y = 0; y < height; y++) { pushOutside(y * width); pushOutside(y * width + width - 1); }
-  while (head < tail) {
-    const i = queue[head++];
-    const x = i % width;
-    if (x > 0) pushOutside(i - 1);
-    if (x < width - 1) pushOutside(i + 1);
-    if (i >= width) pushOutside(i - width);
-    if (i < count - width) pushOutside(i + width);
-  }
-  // 穴が被写体の2%未満なら埋める(折り紙のすき間など大きな穴はそのまま残す)
-  const holeLimit = sizes[keep] * 0.02;
-  const inHole = new Uint8Array(count);
-  for (let start = 0; start < count; start++) {
-    if (outside[start] || label[start] === keep || inHole[start]) continue;
-    const members = [];
-    head = 0;
-    tail = 0;
-    queue[tail++] = start;
-    inHole[start] = 1;
-    while (head < tail) {
-      const i = queue[head++];
-      members.push(i);
-      const x = i % width;
-      for (const n of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, i - width, i + width]) {
-        if (n < 0 || n >= count || outside[n] || label[n] === keep || inHole[n]) continue;
-        inHole[n] = 1;
-        queue[tail++] = n;
+  const count=width*height;
+  const visited=new Uint8Array(count), retained=new Uint8Array(count);
+  const queue=new Int32Array(count);
+  const target=Math.max(0,Math.min(height-1,ty))*width+Math.max(0,Math.min(width-1,tx));
+  let total=0;
+  for(let start=0;start<count;start++) {
+    if(visited[start] || confidence[start]<0.32) continue;
+    let head=0,tail=1,strong=0,peak=0,containsTarget=false;
+    queue[0]=start;visited[start]=1;
+    while(head<tail) {
+      const i=queue[head++],x=i%width,y=Math.floor(i/width);
+      if(confidence[i]>=0.75) strong++;
+      peak=Math.max(peak,confidence[i]);
+      if(i===target) containsTarget=true;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
+        const nx=x+dx,ny=y+dy;
+        if(nx<0 || nx>=width || ny<0 || ny>=height || (!dx && !dy)) continue;
+        const n=ny*width+nx;
+        if(!visited[n] && confidence[n]>=0.32) {visited[n]=1;queue[tail++]=n;}
       }
     }
-    if (members.length < holeLimit) for (const i of members) label[i] = keep;
+    // Preserve separate confident parts inside the user's selection; reject tiny speckles.
+    const enough=tail>=Math.max(3,Math.ceil(count*0.00015));
+    if(!enough || !(containsTarget ? peak>=0.55 : strong>=Math.max(2,tail*0.08))) continue;
+    for(let j=0;j<tail;j++) retained[queue[j]]=1;
+    total+=tail;
   }
-
-  // 残すかたまりから2px以内だけを有効にし、その範囲で確信度をなめらかなアルファにする
-  const near = new Uint8Array(count);
-  for (let i = 0; i < count; i++) {
-    if (label[i] !== keep) continue;
-    const x = i % width;
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const nx = x + dx;
-        const n = i + dy * width + dx;
-        if (nx >= 0 && nx < width && n >= 0 && n < count) near[n] = 1;
-      }
+  if(total<Math.max(3,count*0.001)) return null;
+  const near=new Uint8Array(count);
+  for(let i=0;i<count;i++) {
+    if(!retained[i]) continue;
+    const x=i%width,y=Math.floor(i/width);
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
+      const nx=x+dx,ny=y+dy;
+      if(nx>=0 && nx<width && ny>=0 && ny<height) near[ny*width+nx]=1;
     }
   }
-  const alpha = new Uint8ClampedArray(count);
-  for (let i = 0; i < count; i++) {
-    if (label[i] === keep) { alpha[i] = 255; continue; } // 被写体本体と、埋めた穴
-    if (!near[i]) continue;
-    const t = Math.min(1, Math.max(0, (confidence[i] - 0.2) / 0.3));
-    alpha[i] = Math.round(255 * t * t * (3 - 2 * t));
+  const alpha=new Uint8ClampedArray(count);
+  for(let i=0;i<count;i++) {
+    if(!near[i]) continue;
+    const t=Math.max(0,Math.min(1,(confidence[i]-0.2)/0.5));
+    alpha[i]=Math.round(255*t*t*(3-2*t));
   }
+  // Keep real holes transparent instead of automatically filling gaps between limbs.
   return alpha;
 }
 
-/// 撮影した写真の背景を切り抜く(単色〜比較的シンプルな背景を想定した簡易版。AIが使えない時の予備)。
-/// 画像の外周(四辺)から連結している「背景色に近い領域」だけを透明化するバケツ塗りつぶし方式。
-/// カード内部に背景と似た色があっても、外周とつながっていなければ消えないため、
-/// 本格的なAIセグメンテーションではないが、無地に近い背景であれば実用的な精度が出る。
 function removeBackground(ctx, width, height, tolerance = 42) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
@@ -1448,7 +1400,7 @@ autoCutoutBtn.addEventListener("click", async () => {
     const {canvas,ctx,mask,target}=createSelectedPhoto();
     const original=ctx.getImageData(0,0,canvas.width,canvas.height);
     let usedAi=false;
-    try {usedAi=await removeBackgroundWithAi(ctx,canvas.width,canvas.height,target);}
+    try {usedAi=await removeBackgroundWithAi(ctx,canvas.width,canvas.height,target,mask);}
     catch(e) {logDebug("切り抜き: "+e);}
     if(!usedAi) {ctx.putImageData(original,0,0);removeBackground(ctx,canvas.width,canvas.height);}
     ctx.globalCompositeOperation="destination-in";
