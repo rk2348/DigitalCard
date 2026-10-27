@@ -6,7 +6,7 @@
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
 // 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
-const APP_VERSION = "0.7.0";
+const APP_VERSION = "0.7.1";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {
@@ -774,7 +774,7 @@ function showPhotoCapture(cardData) {
   hideReader();
   nameInputSectionEl.style.display = "none";
   photoCaptureSectionEl.style.display = "block";
-  setStatus("キャラクター全体を指でドラッグして四角く囲んでから撮影してください");
+  setStatus("\u307e\u305a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u3092\u64ae\u5f71\u3057\u3066\u304f\u3060\u3055\u3044");
 
   startPhotoCamera();
   loadSegmenter(); // 撮影までにAIモデルを読み込んでおく
@@ -981,35 +981,120 @@ function setPhotoTarget(x, y) {
   photoTargetEl.style.top = photoTarget.y * 100 + "%";
 }
 
-let photoBounds = null, boundsStart = null, boundsPointer = null;
+const selectionCanvas = document.getElementById("selection-canvas");
+const autoCutoutBtn = document.getElementById("auto-cutout-btn");
+const redrawSelectionBtn = document.getElementById("redraw-selection-btn");
+let selectionPoints = [], selectionPointer = null, selectingPhoto = false, cutoutBusy = false;
+
 function resetPhotoBounds() {
-  photoBounds=null; boundsStart=null; boundsPointer=null;
-  photoTargetEl.style.display="none"; capturePhotoBtn.disabled=true;
+  selectingPhoto = false;
+  selectionPoints = [];
+  selectionPointer = null;
+  selectionCanvas.style.display = "none";
+  autoCutoutBtn.style.display = "none";
+  redrawSelectionBtn.style.display = "none";
+  autoCutoutBtn.disabled = true;
+  capturePhotoBtn.disabled = false;
+  photoTargetEl.style.display = "none";
+  cutoutPreviewCanvasEl.classList.remove("selecting");
 }
-function framePoint(e) {
-  const r=photoFrameEl.getBoundingClientRect();
-  return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};
+function drawSelection() {
+  const ctx = selectionCanvas.getContext("2d");
+  ctx.clearRect(0, 0, selectionCanvas.width, selectionCanvas.height);
+  if (!selectionPoints.length) return;
+  ctx.beginPath();
+  selectionPoints.forEach((p,i) => i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y));
+  if (selectionPointer === null) ctx.closePath();
+  ctx.fillStyle = "rgba(247,207,112,0.18)";
+  ctx.fill();
+  ctx.strokeStyle = "#f7cf70";
+  ctx.lineWidth = Math.max(3,selectionCanvas.width/160);
+  ctx.stroke();
 }
-photoFrameEl.addEventListener("pointerdown",e=>{
-  if(photoVideoEl.style.display==="none" || boundsPointer!==null || capturePhotoBtn.dataset.busy) return;
-  e.preventDefault(); boundsPointer=e.pointerId; boundsStart=framePoint(e); photoBounds=null;
-  capturePhotoBtn.disabled=true; photoTargetEl.style.display="none";
-  photoFrameEl.setPointerCapture(e.pointerId);
+function selectionPoint(e) {
+  const r = selectionCanvas.getBoundingClientRect();
+  return {x:Math.max(0,Math.min(selectionCanvas.width,(e.clientX-r.left)/r.width*selectionCanvas.width)),
+    y:Math.max(0,Math.min(selectionCanvas.height,(e.clientY-r.top)/r.height*selectionCanvas.height))};
+}
+selectionCanvas.addEventListener("pointerdown", e => {
+  if (!selectingPhoto || cutoutBusy || selectionPointer !== null) return;
+  e.preventDefault();
+  selectionPointer = e.pointerId;
+  selectionCanvas.setPointerCapture(e.pointerId);
+  selectionPoints = [selectionPoint(e)];
+  autoCutoutBtn.disabled = true;
+  drawSelection();
 });
-function updatePhotoBounds(e) {
-  const p=framePoint(e);
-  photoBounds={x:Math.min(p.x,boundsStart.x),y:Math.min(p.y,boundsStart.y),width:Math.abs(p.x-boundsStart.x),height:Math.abs(p.y-boundsStart.y)};
-  Object.assign(photoTargetEl.style,{display:"block",left:photoBounds.x*100+"%",top:photoBounds.y*100+"%",width:photoBounds.width*100+"%",height:photoBounds.height*100+"%"});
-}
-photoFrameEl.addEventListener("pointermove",e=>{if(boundsPointer===e.pointerId) updatePhotoBounds(e);});
-photoFrameEl.addEventListener("pointerup",e=>{
-  if(boundsPointer!==e.pointerId) return;
-  updatePhotoBounds(e); boundsPointer=null;
-  const valid=photoBounds.width>=0.08 && photoBounds.height>=0.08;
-  capturePhotoBtn.disabled=!valid;
-  setStatus(valid?"\u56f2\u307f\u3092\u78ba\u8a8d\u3057\u3066\u64ae\u5f71\u3057\u3066\u304f\u3060\u3055\u3044":"\u3082\u3046\u5c11\u3057\u5927\u304d\u304f\u56f2\u3093\u3067\u304f\u3060\u3055\u3044");
+selectionCanvas.addEventListener("pointermove", e => {
+  if (e.pointerId !== selectionPointer) return;
+  const p = selectionPoint(e), last = selectionPoints[selectionPoints.length-1];
+  if (Math.hypot(p.x-last.x,p.y-last.y)<3) return;
+  selectionPoints.push(p);
+  drawSelection();
 });
-photoFrameEl.addEventListener("pointercancel",resetPhotoBounds);
+selectionCanvas.addEventListener("pointerup", e => {
+  if (e.pointerId !== selectionPointer) return;
+  selectionPoints.push(selectionPoint(e));
+  selectionPointer = null;
+  let area = 0;
+  selectionPoints.forEach((p,i) => {const q=selectionPoints[(i+1)%selectionPoints.length];area+=p.x*q.y-q.x*p.y;});
+  autoCutoutBtn.disabled = selectionPoints.length<4 || Math.abs(area)/2<selectionCanvas.width*selectionCanvas.height*0.005;
+  drawSelection();
+  setStatus(autoCutoutBtn.disabled ? "キャラクター全体の周りを、もう少し大きく囲んでください" : "囲みの内側を自動で切り抜けます。なぞり直すと囲みを変更できます");
+});
+selectionCanvas.addEventListener("pointercancel", () => {
+  selectionPointer=null; selectionPoints=[]; autoCutoutBtn.disabled=true; drawSelection();
+});
+function showPhotoSelection() {
+  capturedCutoutDataUrl=null;
+  selectingPhoto=true;
+  selectionPoints=[];
+  selectionPointer=null;
+  cutoutPreviewCanvasEl.width=photoCaptureCanvasEl.width;
+  cutoutPreviewCanvasEl.height=photoCaptureCanvasEl.height;
+  cutoutPreviewCanvasEl.getContext("2d").drawImage(photoCaptureCanvasEl,0,0);
+  cutoutPreviewCanvasEl.classList.add("selecting");
+  cutoutPreviewCanvasEl.style.display="block";
+  selectionCanvas.width=photoCaptureCanvasEl.width;
+  selectionCanvas.height=photoCaptureCanvasEl.height;
+  selectionCanvas.style.display="block";
+  autoCutoutBtn.style.display="inline-block";
+  autoCutoutBtn.disabled=true;
+  redrawSelectionBtn.style.display="none";
+  usePhotoBtn.style.display="none";
+  setStatus("写真のキャラクター全体の少し外側を、指でぐるっとなぞってください。指を離すと囲みが閉じます");
+}
+redrawSelectionBtn.addEventListener("click",showPhotoSelection);
+
+function createSelectedPhoto() {
+  let left=Infinity,top=Infinity,right=0,bottom=0;
+  for(const p of selectionPoints) {left=Math.min(left,p.x);top=Math.min(top,p.y);right=Math.max(right,p.x);bottom=Math.max(bottom,p.y);}
+  left=Math.floor(left);top=Math.floor(top);right=Math.ceil(right);bottom=Math.ceil(bottom);
+  const canvas=document.createElement("canvas");
+  canvas.width=Math.max(1,right-left);canvas.height=Math.max(1,bottom-top);
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(photoCaptureCanvasEl,left,top,canvas.width,canvas.height,0,0,canvas.width,canvas.height);
+  const mask=document.createElement("canvas");mask.width=canvas.width;mask.height=canvas.height;
+  const m=mask.getContext("2d");m.beginPath();
+  selectionPoints.forEach((p,i)=>i?m.lineTo(p.x-left,p.y-top):m.moveTo(p.x-left,p.y-top));
+  m.closePath();m.fillStyle="white";m.fill();
+  // Pick an interior point far from the boundary, including for concave selections.
+  const pixels=m.getImageData(0,0,mask.width,mask.height).data;
+  const distance=new Float32Array(mask.width*mask.height);
+  let best=0;
+  for(let y=0;y<mask.height;y++) for(let x=0;x<mask.width;x++) {
+    const i=y*mask.width+x;
+    if(pixels[i*4+3]<128) continue;
+    distance[i]=1+Math.min(x?distance[i-1]:0,y?distance[i-mask.width]:0);
+  }
+  for(let y=mask.height-1;y>=0;y--) for(let x=mask.width-1;x>=0;x--) {
+    const i=y*mask.width+x;if(!distance[i]) continue;
+    distance[i]=Math.min(distance[i],1+Math.min(x+1<mask.width?distance[i+1]:0,y+1<mask.height?distance[i+mask.width]:0));
+    if(distance[i]>distance[best]) best=i;
+  }
+  return {canvas,ctx,mask,target:{x:((best%mask.width)+0.5)/mask.width,y:(Math.floor(best/mask.width)+0.5)/mask.height}};
+}
+
 function captureVisibleFrame(canvas) {
   const vw = photoVideoEl.videoWidth;
   const vh = photoVideoEl.videoHeight;
@@ -1343,70 +1428,54 @@ function resizeCanvasToDataUrl(sourceCanvas, maxDimension) {
   return resizedCanvas.toDataURL("image/png");
 }
 
-capturePhotoBtn.addEventListener("click", async () => {
-  if (!photoVideoEl.videoWidth) {
-    setStatus("カメラの準備中です。少し待ってから撮影してください", "error");
-    return;
-  }
-  if (capturePhotoBtn.disabled) return;
-
+capturePhotoBtn.addEventListener("click", () => {
+  if (!photoVideoEl.videoWidth) {setStatus("カメラの準備中です", "error");return;}
   captureVisibleFrame(photoCaptureCanvasEl);
-  const source=document.createElement("canvas");
-  source.width=photoCaptureCanvasEl.width; source.height=photoCaptureCanvasEl.height;
-  source.getContext("2d").drawImage(photoCaptureCanvasEl,0,0);
-  const bx=Math.floor(photoBounds.x*source.width),by=Math.floor(photoBounds.y*source.height);
-  photoCaptureCanvasEl.width=Math.max(1,Math.floor(photoBounds.width*source.width));
-  photoCaptureCanvasEl.height=Math.max(1,Math.floor(photoBounds.height*source.height));
-  const ctx=photoCaptureCanvasEl.getContext("2d",{willReadFrequently:true});
-  const restoreSelection=()=>{ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.drawImage(source,bx,by,ctx.canvas.width,ctx.canvas.height,0,0,ctx.canvas.width,ctx.canvas.height);};
-  restoreSelection();
-  const width = photoCaptureCanvasEl.width;
-  const height = photoCaptureCanvasEl.height;
-
-  capturePhotoBtn.disabled = true;
-  capturePhotoBtn.dataset.busy="true";
-  skipPhotoBtn.disabled=true;
-  photoVideoEl.pause(); // 撮影した瞬間の映像で止めて、処理中であることを分かりやすくする
-  setStatus("AIでキャラクターを切り抜いています…");
-  let usedAi = false;
-  try {
-    usedAi = await removeBackgroundWithAi(ctx, width, height, {x:0.5,y:0.5});
-  } catch (e) {
-    logDebug("エラー(AIでの切り抜き。従来の方式で切り抜きます): " + e);
-  }
-  if (!usedAi) {
-    restoreSelection(); // 一時停止中の同じ映像で撮り直してから従来の方式で切り抜く
-    removeBackground(ctx, width, height);
-  }
-  capturePhotoBtn.disabled = false;
-  delete capturePhotoBtn.dataset.busy;
-  skipPhotoBtn.disabled=false;
-  photoVideoEl.play().catch(() => {});
-
-  const trimmedCanvas = trimTransparentMargins(photoCaptureCanvasEl);
-
-  cutoutPreviewCanvasEl.width = trimmedCanvas.width;
-  cutoutPreviewCanvasEl.height = trimmedCanvas.height;
-  cutoutPreviewCanvasEl.getContext("2d").drawImage(trimmedCanvas, 0, 0);
-
-  capturedCutoutDataUrl = resizeCanvasToDataUrl(trimmedCanvas, 500);
-
-  photoVideoEl.style.display = "none";
-  cutoutPreviewCanvasEl.style.display = "block";
-  photoTargetEl.style.display = "none";
-  capturePhotoBtn.style.display = "none";
-  retakePhotoBtn.style.display = "inline-block";
-  usePhotoBtn.style.display = "inline-block";
-
-  setStatus(
-    usedAi
-      ? "背景を切り抜きました。よければ「この写真を使う」を押してください"
-      : "簡易モードで切り抜きました。うまくいかない時は無地の背景で撮り直してください"
-  );
+  photoVideoEl.pause();
+  photoVideoEl.style.display="none";
+  capturePhotoBtn.style.display="none";
+  retakePhotoBtn.style.display="inline-block";
+  showPhotoSelection();
 });
+autoCutoutBtn.addEventListener("click", async () => {
+  if(autoCutoutBtn.disabled || cutoutBusy) return;
+  cutoutBusy=true;
+  autoCutoutBtn.disabled=true;
+  retakePhotoBtn.disabled=true;
+  skipPhotoBtn.disabled=true;
+  setStatus("囲んだ範囲からキャラクターの輪郭を切り抜いています…");
+  try {
+    const {canvas,ctx,mask,target}=createSelectedPhoto();
+    const original=ctx.getImageData(0,0,canvas.width,canvas.height);
+    let usedAi=false;
+    try {usedAi=await removeBackgroundWithAi(ctx,canvas.width,canvas.height,target);}
+    catch(e) {logDebug("切り抜き: "+e);}
+    if(!usedAi) {ctx.putImageData(original,0,0);removeBackground(ctx,canvas.width,canvas.height);}
+    ctx.globalCompositeOperation="destination-in";
+    ctx.drawImage(mask,0,0);
+    ctx.globalCompositeOperation="source-over";
+    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    if(!pixels.some((v,i)=>i%4===3 && v>128)) throw new Error("被写体が見つかりませんでした。囲みを広げて試してください");
+    const trimmed=trimTransparentMargins(canvas);
+    cutoutPreviewCanvasEl.width=trimmed.width;cutoutPreviewCanvasEl.height=trimmed.height;
+    cutoutPreviewCanvasEl.getContext("2d").drawImage(trimmed,0,0);
+    capturedCutoutDataUrl=resizeCanvasToDataUrl(trimmed,500);
+    resetPhotoBounds();
+    redrawSelectionBtn.style.display="inline-block";
+    usePhotoBtn.style.display="inline-block";
+    setStatus(usedAi?"輪郭を切り抜きました。「この写真を使う」で進めます":"簡易モードで切り抜きました。結果を確認してください");
+  } catch(e) {
+    autoCutoutBtn.disabled=false;
+    setStatus(e.message || "切り抜きに失敗しました。もう一度試してください", "error");
+  } finally {
+    cutoutBusy=false;retakePhotoBtn.disabled=false;skipPhotoBtn.disabled=false;
+  }
+});
+
 
 retakePhotoBtn.addEventListener("click", () => {
   resetPhotoBounds();
+  photoVideoEl.play().catch(() => {});
   capturedCutoutDataUrl = null;
 
   photoVideoEl.style.display = "block";
@@ -1416,7 +1485,7 @@ retakePhotoBtn.addEventListener("click", () => {
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
 
-  setStatus("キャラクター全体を指でドラッグして四角く囲んでから撮影してください");
+  setStatus("\u307e\u305a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u3092\u64ae\u5f71\u3057\u3066\u304f\u3060\u3055\u3044");
 });
 
 usePhotoBtn.addEventListener("click", () => {

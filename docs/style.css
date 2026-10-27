@@ -1618,3 +1618,6 @@ h1 {
 .photo-frame { touch-action: none; }
 .photo-target { margin: 0; border-radius: 8px; animation: none; transition: none; box-shadow: 0 0 0 2000px rgba(0,0,0,0.45); }
 .photo-target::after { display: none; }
+
+#selection-canvas { z-index: 4; touch-action: none; cursor: crosshair; }
+.photo-frame canvas#cutout-preview-canvas.selecting { object-fit: fill; }
