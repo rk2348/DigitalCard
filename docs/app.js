@@ -6,7 +6,7 @@
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
 // 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.7.0";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {
@@ -199,6 +199,8 @@ const battleTurnNormalBtn = document.getElementById("battle-turn-normal-btn");
 const battleTurnWeakBtn = document.getElementById("battle-turn-weak-btn");
 const battleTurnResultEl = document.getElementById("battle-turn-result");
 const battleTurnHomeBtn = document.getElementById("battle-turn-home-btn");
+const battleTurnRecordEl = document.getElementById("battle-turn-record");
+const battleWinCardBtn = document.getElementById("battle-win-card-btn");
 const devPanelEl = document.getElementById("dev-panel");
 const devCardIdInput = document.getElementById("dev-card-id");
 const devRegisterBtn = document.getElementById("dev-register-btn");
@@ -763,11 +765,11 @@ function showPhotoCapture(cardData) {
   // 表示状態を初期化(2回目以降のスキャンでも正しく表示されるように)
   photoVideoEl.style.display = "block";
   cutoutPreviewCanvasEl.style.display = "none";
-  photoTargetEl.style.display = "block";
+  photoTargetEl.style.display = "none";
   capturePhotoBtn.style.display = "inline-block";
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
-  setPhotoTarget(0.5, 0.5);
+  resetPhotoBounds();
 
   hideReader();
   nameInputSectionEl.style.display = "none";
@@ -979,14 +981,35 @@ function setPhotoTarget(x, y) {
   photoTargetEl.style.top = photoTarget.y * 100 + "%";
 }
 
-photoFrameEl.addEventListener("click", (event) => {
-  if (photoVideoEl.style.display === "none") return; // 切り抜き結果の表示中は動かさない
-  const rect = photoFrameEl.getBoundingClientRect();
-  setPhotoTarget((event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height);
+let photoBounds = null, boundsStart = null, boundsPointer = null;
+function resetPhotoBounds() {
+  photoBounds=null; boundsStart=null; boundsPointer=null;
+  photoTargetEl.style.display="none"; capturePhotoBtn.disabled=true;
+}
+function framePoint(e) {
+  const r=photoFrameEl.getBoundingClientRect();
+  return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))};
+}
+photoFrameEl.addEventListener("pointerdown",e=>{
+  if(photoVideoEl.style.display==="none" || boundsPointer!==null || capturePhotoBtn.dataset.busy) return;
+  e.preventDefault(); boundsPointer=e.pointerId; boundsStart=framePoint(e); photoBounds=null;
+  capturePhotoBtn.disabled=true; photoTargetEl.style.display="none";
+  photoFrameEl.setPointerCapture(e.pointerId);
 });
-
-/// 撮影枠に見えている範囲(videoはobject-fit: coverで枠いっぱいに拡大されている)だけを
-/// キャンバスに切り出す。推論が重くならないよう最大辺をSEGMENT_MAX_DIMENSIONに縮める。
+function updatePhotoBounds(e) {
+  const p=framePoint(e);
+  photoBounds={x:Math.min(p.x,boundsStart.x),y:Math.min(p.y,boundsStart.y),width:Math.abs(p.x-boundsStart.x),height:Math.abs(p.y-boundsStart.y)};
+  Object.assign(photoTargetEl.style,{display:"block",left:photoBounds.x*100+"%",top:photoBounds.y*100+"%",width:photoBounds.width*100+"%",height:photoBounds.height*100+"%"});
+}
+photoFrameEl.addEventListener("pointermove",e=>{if(boundsPointer===e.pointerId) updatePhotoBounds(e);});
+photoFrameEl.addEventListener("pointerup",e=>{
+  if(boundsPointer!==e.pointerId) return;
+  updatePhotoBounds(e); boundsPointer=null;
+  const valid=photoBounds.width>=0.08 && photoBounds.height>=0.08;
+  capturePhotoBtn.disabled=!valid;
+  setStatus(valid?"\u56f2\u307f\u3092\u78ba\u8a8d\u3057\u3066\u64ae\u5f71\u3057\u3066\u304f\u3060\u3055\u3044":"\u3082\u3046\u5c11\u3057\u5927\u304d\u304f\u56f2\u3093\u3067\u304f\u3060\u3055\u3044");
+});
+photoFrameEl.addEventListener("pointercancel",resetPhotoBounds);
 function captureVisibleFrame(canvas) {
   const vw = photoVideoEl.videoWidth;
   const vh = photoVideoEl.videoHeight;
@@ -1327,24 +1350,37 @@ capturePhotoBtn.addEventListener("click", async () => {
   }
   if (capturePhotoBtn.disabled) return;
 
-  const ctx = captureVisibleFrame(photoCaptureCanvasEl);
+  captureVisibleFrame(photoCaptureCanvasEl);
+  const source=document.createElement("canvas");
+  source.width=photoCaptureCanvasEl.width; source.height=photoCaptureCanvasEl.height;
+  source.getContext("2d").drawImage(photoCaptureCanvasEl,0,0);
+  const bx=Math.floor(photoBounds.x*source.width),by=Math.floor(photoBounds.y*source.height);
+  photoCaptureCanvasEl.width=Math.max(1,Math.floor(photoBounds.width*source.width));
+  photoCaptureCanvasEl.height=Math.max(1,Math.floor(photoBounds.height*source.height));
+  const ctx=photoCaptureCanvasEl.getContext("2d",{willReadFrequently:true});
+  const restoreSelection=()=>{ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);ctx.drawImage(source,bx,by,ctx.canvas.width,ctx.canvas.height,0,0,ctx.canvas.width,ctx.canvas.height);};
+  restoreSelection();
   const width = photoCaptureCanvasEl.width;
   const height = photoCaptureCanvasEl.height;
 
   capturePhotoBtn.disabled = true;
+  capturePhotoBtn.dataset.busy="true";
+  skipPhotoBtn.disabled=true;
   photoVideoEl.pause(); // 撮影した瞬間の映像で止めて、処理中であることを分かりやすくする
   setStatus("AIでキャラクターを切り抜いています…");
   let usedAi = false;
   try {
-    usedAi = await removeBackgroundWithAi(ctx, width, height, photoTarget);
+    usedAi = await removeBackgroundWithAi(ctx, width, height, {x:0.5,y:0.5});
   } catch (e) {
     logDebug("エラー(AIでの切り抜き。従来の方式で切り抜きます): " + e);
   }
   if (!usedAi) {
-    captureVisibleFrame(photoCaptureCanvasEl); // 一時停止中の同じ映像で撮り直してから従来の方式で切り抜く
+    restoreSelection(); // 一時停止中の同じ映像で撮り直してから従来の方式で切り抜く
     removeBackground(ctx, width, height);
   }
   capturePhotoBtn.disabled = false;
+  delete capturePhotoBtn.dataset.busy;
+  skipPhotoBtn.disabled=false;
   photoVideoEl.play().catch(() => {});
 
   const trimmedCanvas = trimTransparentMargins(photoCaptureCanvasEl);
@@ -1370,6 +1406,7 @@ capturePhotoBtn.addEventListener("click", async () => {
 });
 
 retakePhotoBtn.addEventListener("click", () => {
+  resetPhotoBounds();
   capturedCutoutDataUrl = null;
 
   photoVideoEl.style.display = "block";

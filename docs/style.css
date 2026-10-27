@@ -659,6 +659,40 @@ h1 {
   color: var(--player2);
 }
 
+/* 対戦後に出す、このカードの通算成績 */
+.battle-turn-record {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  color: var(--parchment);
+  margin: -8px 0 18px;
+}
+
+/* 勝った時だけ出す「勝利カードを保存する」(金のプライマリボタン) */
+.battle-win-card-btn {
+  width: 100%;
+  padding: 14px;
+  margin-bottom: 12px;
+  border-radius: 999px;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--gold-light) 0%, var(--gold) 45%, var(--gold-deep) 100%);
+  color: #2a1606;
+  border: 1px solid #ffe9a8;
+  box-shadow: inset 0 -3px 0 rgba(90, 50, 10, 0.35), 0 0 0 3px rgba(9, 8, 15, 0.7), 0 0 22px rgba(247, 207, 112, 0.4);
+  transition: transform 0.12s ease;
+}
+
+.battle-win-card-btn:active {
+  transform: scale(0.97);
+}
+
+.battle-win-card-btn:disabled {
+  filter: grayscale(0.6) brightness(0.7);
+}
+
 /* ---------- 名前入力 ---------- */
 
 .scanned-card-label {
@@ -1581,3 +1615,6 @@ h1 {
     transform: none !important;
   }
 }
+.photo-frame { touch-action: none; }
+.photo-target { margin: 0; border-radius: 8px; animation: none; transition: none; box-shadow: 0 0 0 2000px rgba(0,0,0,0.45); }
+.photo-target::after { display: none; }
