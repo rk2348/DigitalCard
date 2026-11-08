@@ -144,17 +144,29 @@ function buildSkillDescription(skillType, ratio) {
 
 /// seedとキャラクター名から、確定したステータスを生成する。
 /// 戻り値の形式はUnity側から返していたレスポンスJSONと同じ(showStatusDisplayでそのまま使える)。
-function generateCharacterStats(seed, characterName) {
+const STAT_BUDGET = 18;   // 攻撃・防御に配分する合計(攻撃+1 = 防御+2)
+const DEFENSE_COST = 0.5; // 防御1あたりのコスト(攻撃1に対して)
+const SPEED_COST = 0.03;  // 素早さ1あたりのコスト
+
+/// elementOverride: 絵の色から決めた属性(なければシード値で決める)
+function generateCharacterStats(seed, characterName, elementOverride = null) {
   const rand = createSeededRandom(seed);
   const nextInt = (min, maxExclusive) => min + Math.floor(rand() * (maxExclusive - min));
 
-  let attack = nextInt(10, 31);
-  let defense = nextInt(5, 21);
+  // 攻撃・防御・素早さは「合計の強さ」をそろえて配分する(どのカードも勝率がほぼ同じになるよう、
+  // 対戦シミュレーションで調整した値。C#の CharacterStats.AssignRandomStats と同じ式)。
+  // 防御は攻撃の半分の効き目なので2倍の値をもらえる。素早さは先攻を決めるだけなので少しだけ攻撃・防御から引く
   let speed = nextInt(5, 21);
+  const budget = STAT_BUDGET - (speed - 5) * SPEED_COST;
+  const attackShare = 0.25 + rand() * 0.5; // 攻撃に回す割合(25〜75%)
+  let attack = 10 + Math.round(budget * attackShare);
+  let defense = 5 + Math.round((budget * (1 - attackShare)) / DEFENSE_COST);
   const maxHp = 100;
   const hp = maxHp;
 
-  const element = ELEMENT_TYPES[nextInt(0, ELEMENT_TYPES.length)];
+  // 乱数は必ず同じ回数だけ使う(属性を絵の色で決めても、ほかの能力値が変わらないように)
+  const randomElement = ELEMENT_TYPES[nextInt(0, ELEMENT_TYPES.length)];
+  const element = ELEMENT_TYPES.includes(elementOverride) ? elementOverride : randomElement;
 
   const skillType = SKILL_TYPES[nextInt(0, SKILL_TYPES.length)];
   const ratio = 0.2 + rand() * 0.3; // 0.2〜0.5
@@ -1228,6 +1240,7 @@ function cutoutDrawingOnPaper(data, width, height, inside) {
     if (Math.abs(lums[k] - paperLum) < 40 && chromas[k] < paperChroma + 30) fitSamples.push(i);
   }
   const fit = fitQuadraticSurface(data, width, height, fitSamples.length >= 30 ? fitSamples : bandIdx);
+  const paperAt = buildPaperModel(data, width, height, inside, fit, paperChroma);
 
   // ---- インクの濃さ(紙の色からの離れ具合)を求める ----
   const blurred = boxBlurRgb(data, width, height, 1);
@@ -1235,7 +1248,7 @@ function cutoutDrawingOnPaper(data, width, height, inside) {
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const i = y * width + x;
     if (!inside[i]) continue;
-    const bg = evalSurface(fit, x / width, y / height);
+    const bg = paperAt(x, y);
     let m = 0;
     for (let c = 0; c < 3; c++) {
       const ratio = blurred[i * 3 + c] / Math.max(24, bg[c]);
@@ -1261,7 +1274,7 @@ function cutoutDrawingOnPaper(data, width, height, inside) {
   mask = erode(dilate(mask, width, height, radius), width, height, radius);
 
   // ---- 囲みが紙の外(机など暗い所)まではみ出していたら、その暗い部分は背景にする ----
-  const darkLimit = paperLum * 0.42;
+  const darkLimit = paperLum * 0.55;
   const isDark = (i) => { const p = i * 4; return 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2] < darkLimit; };
   {
     const q = [];
@@ -1312,6 +1325,34 @@ function cutoutDrawingOnPaper(data, width, height, inside) {
     for (const i of drop) background[i] = 1;
   }
 
+  // ---- 線で囲まれた紙の部分(穴)の扱い ----
+  // 白目や水玉のような小さな穴は絵の一部として残し、大きな円の内側や線と線のあいだの
+  // 広い紙は背景として抜く(大きさは囲みの面積に対する割合で判断)
+  {
+    let insideTotal = 0;
+    for (let i = 0; i < count; i++) if (inside[i]) insideTotal++;
+    const holeLimit = insideTotal * 0.008;
+    const seen = new Uint8Array(count);
+    for (let s = 0; s < count; s++) {
+      if (background[s] || mask[s] || seen[s]) continue;
+      let h = 0, t = 1; queue[0] = s; seen[s] = 1;
+      while (h < t) {
+        const i = queue[h++], x = i % width;
+        const ns = [x > 0 ? i - 1 : -1, x + 1 < width ? i + 1 : -1, i - width, i + width];
+        for (const n of ns) {
+          if (n < 0 || n >= count || seen[n] || background[n] || mask[n]) continue;
+          seen[n] = 1; queue[t++] = n;
+        }
+      }
+      let inkSum = 0;
+      for (let k = 0; k < t; k++) inkSum += ink[queue[k]];
+      const meanInk = inkSum / t;
+      // 薄い塗り(クレヨンのかすれ等)で紙が透けている所は、平均するとインクが乗っているので残す
+      const lightlyPainted = meanInk > Math.max(med * 2.5, med + 0.012);
+      if (t > holeLimit && !lightlyPainted) for (let k = 0; k < t; k++) background[queue[k]] = 1;
+    }
+  }
+
   // ---- 小さなゴミ(紙のシミ、離れた文字など)を消す ----
   const fg = new Uint8Array(count);
   for (let i = 0; i < count; i++) fg[i] = background[i] ? 0 : 1;
@@ -1354,7 +1395,87 @@ function cutoutDrawingOnPaper(data, width, height, inside) {
     }
     alpha[i] = fg[i] ? Math.round(255 * Math.max(0.55, sum / n)) : Math.round(255 * Math.min(0.3, sum / n * 0.5));
   }
-  return { paperLike: true, alpha, threshold };
+  // 紙の色(照明の色かぶりを打ち消して絵の色を判定するのに使う)
+  const paperColor = [0, 1, 2].map((c) => median(bandIdx.filter((_, k) => Math.abs(lums[k] - paperLum) < 40).map((i) => data[i * 4 + c])));
+  return { paperLike: true, alpha, threshold, paperColor };
+}
+
+/// 紙の色を場所ごとに推定する。画像を格子に分け、各マスの「明るくて色味の少ない画素」から紙の色を求める。
+/// 塗りつぶしや濃い線しかないマスは、周りのマスから補う。影や照明のムラ(急な明暗の境目も含む)に対応する。
+function buildPaperModel(data, width, height, inside, fit, paperChroma) {
+  const size = Math.min(width, height);
+  const cell = Math.max(12, Math.round(size / 14));
+  const gw = Math.ceil(width / cell), gh = Math.ceil(height / cell);
+  const grid = new Float32Array(gw * gh * 3), valid = new Uint8Array(gw * gh);
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    const prior = evalSurface(fit, (gx + 0.5) * cell / width, (gy + 0.5) * cell / height);
+    const priorLum = 0.299 * prior[0] + 0.587 * prior[1] + 0.114 * prior[2];
+    const cand = [];
+    let total = 0;
+    for (let y = gy * cell; y < Math.min(height, (gy + 1) * cell); y++) for (let x = gx * cell; x < Math.min(width, (gx + 1) * cell); x++) {
+      const i = y * width + x;
+      if (!inside[i]) continue;
+      total++;
+      const p = i * 4, r = data[p], g = data[p + 1], b = data[p + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      // 紙と同じ色合い(明るさで割った色の比率が近い)の画素だけを候補にする。薄い黄色などの淡い塗りを紙と間違えないため
+      const hueDiff = Math.abs(r / lum - prior[0] / priorLum) + Math.abs(g / lum - prior[1] / priorLum) + Math.abs(b / lum - prior[2] / priorLum);
+      if (lum > priorLum * 0.45 && hueDiff < 0.09) cand.push([lum, r, g, b]);
+    }
+    if (total < cell * cell * 0.25 || cand.length < total * 0.12) continue;
+    cand.sort((a, b) => b[0] - a[0]);
+    const top = cand.slice(0, Math.max(1, Math.round(cand.length * 0.4)));
+    const m = top[top.length >> 1];
+    const k = gy * gw + gx;
+    grid[k * 3] = m[1]; grid[k * 3 + 1] = m[2]; grid[k * 3 + 2] = m[3]; valid[k] = 1;
+  }
+  const lumOf = (k) => 0.299 * grid[k * 3] + 0.587 * grid[k * 3 + 1] + 0.114 * grid[k * 3 + 2];
+  // 周りより明らかに暗いマスは、灰色の塗りを紙と取り違えたものとみなして捨てる
+  const drop = [];
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    const k = gy * gw + gx; if (!valid[k]) continue;
+    const ls = [];
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const nx = gx + dx, ny = gy + dy; if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+      const n = ny * gw + nx; if (valid[n]) ls.push(lumOf(n));
+    }
+    if (ls.length >= 3) { ls.sort((a, b) => a - b); if (lumOf(k) < ls[ls.length >> 1] * 0.84) drop.push(k); }
+  }
+  for (const k of drop) valid[k] = 0;
+  // 足りないマスを周りから補う(なければ2次曲面の値)
+  let any = valid.some((v) => v);
+  for (let iter = 0; iter < gw + gh && any; iter++) {
+    const add = [];
+    for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+      const k = gy * gw + gx; if (valid[k]) continue;
+      let s0 = 0, s1 = 0, s2 = 0, n = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = gx + dx, ny = gy + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+        const q = ny * gw + nx; if (!valid[q]) continue;
+        s0 += grid[q * 3]; s1 += grid[q * 3 + 1]; s2 += grid[q * 3 + 2]; n++;
+      }
+      if (n) add.push([k, s0 / n, s1 / n, s2 / n]);
+    }
+    if (!add.length) break;
+    for (const [k, a, b, c] of add) { grid[k * 3] = a; grid[k * 3 + 1] = b; grid[k * 3 + 2] = c; valid[k] = 1; }
+  }
+  for (let k = 0; k < gw * gh; k++) if (!valid[k]) {
+    const gx = k % gw, gy = (k - gx) / gw;
+    const v = evalSurface(fit, (gx + 0.5) * cell / width, (gy + 0.5) * cell / height);
+    grid[k * 3] = v[0]; grid[k * 3 + 1] = v[1]; grid[k * 3 + 2] = v[2];
+  }
+  // マス同士をなめらかにつないで画素ごとの値にする(双線形補間)
+  return (x, y) => {
+    const fx = Math.min(gw - 1, Math.max(0, x / cell - 0.5)), fy = Math.min(gh - 1, Math.max(0, y / cell - 0.5));
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(gw - 1, x0 + 1), y1 = Math.min(gh - 1, y0 + 1);
+    const tx = fx - x0, ty = fy - y0, out = [0, 0, 0];
+    for (let c = 0; c < 3; c++) {
+      const a = grid[(y0 * gw + x0) * 3 + c], b = grid[(y0 * gw + x1) * 3 + c];
+      const d = grid[(y1 * gw + x0) * 3 + c], e = grid[(y1 * gw + x1) * 3 + c];
+      out[c] = (a * (1 - tx) + b * tx) * (1 - ty) + (d * (1 - tx) + e * tx) * ty;
+    }
+    return out;
+  };
 }
 
 // 2次曲面 c0 + c1 x + c2 y + c3 x^2 + c4 xy + c5 y^2 をRGBそれぞれに当てはめる
@@ -1450,6 +1571,48 @@ function morph(mask, width, height, r, isDilate) {
 function dilate(mask, w, h, r) { return morph(mask, w, h, r, true); }
 function erode(mask, w, h, r) { return morph(mask, w, h, r, false); }
 
+/// 切り抜いた絵の色から属性を決める。
+/// 赤・橙→火、黄→光、緑→風、青・水色→水、紫→闇、茶色→地。
+/// 黒い塗りが大きい絵は闇。色がほとんどない絵(鉛筆だけ等)はnullを返す(→従来どおりシード値で決める)。
+/// data: RGBA(Uint8ClampedArray)。戻り値: { element, label, ratio } または null
+/// paper: 紙の色[r,g,b](分かれば)。照明の色かぶり(黄色っぽい部屋の光など)を打ち消してから色を判定する
+function elementFromColors(data, paper) {
+  const gain = paper ? paper.map((c) => Math.max(...paper) / Math.max(1, c)) : [1, 1, 1];
+  const weights = { Fire: 0, Light: 0, Wind: 0, Water: 0, Dark: 0, Earth: 0 };
+  let opaque = 0, dark = 0;
+  for (let p = 0; p < data.length; p += 4) {
+    if (data[p + 3] < 200) continue;
+    opaque++;
+    const r = Math.min(1, data[p] * gain[0] / 255), g = Math.min(1, data[p + 1] * gain[1] / 255), b = Math.min(1, data[p + 2] * gain[2] / 255);
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const v = max, s = max ? (max - min) / max : 0;
+    if (v < 0.28) { dark++; continue; }       // 黒(濃い線・黒い塗り)
+    if (s < 0.2) continue;                     // 白・灰色(紙、鉛筆の線)
+    let h;
+    const d = max - min;
+    if (max === r) h = 60 * (((g - b) / d) % 6);
+    else if (max === g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+    if (h < 0) h += 360;
+    const w = s * v; // 鮮やかで明るい色ほど重く数える
+    let element;
+    if (h >= 12 && h < 48 && v < 0.62) element = "Earth"; // 暗い橙=茶色
+    else if (h < 45 || h >= 330) element = "Fire";
+    else if (h < 70) element = "Light";
+    else if (h < 165) element = "Wind";
+    else if (h < 255) element = "Water";
+    else element = "Dark";
+    weights[element] += w;
+  }
+  if (!opaque) return null;
+  // 黒い塗りが大きい絵は闇(細い輪郭線くらいでは闇にしない)
+  if (dark > opaque * 0.2) weights.Dark += (dark - opaque * 0.2) * 0.6;
+  let best = null, total = 0;
+  for (const [k, w] of Object.entries(weights)) { total += w; if (!best || w > weights[best]) best = k; }
+  if (total < opaque * 0.04) return null; // 色がほとんど塗られていない
+  return { element: best, ratio: weights[best] / total };
+}
+
 /// 囲んだ範囲が白い紙なら、紙に描いた絵専用の方式で切り抜く。切り抜けたらtrue。
 function cutoutPaperDrawing(ctx, width, height, selectionMask) {
   const imageData = ctx.getImageData(0, 0, width, height);
@@ -1461,7 +1624,25 @@ function cutoutPaperDrawing(ctx, width, height, selectionMask) {
   if (!result.alpha) return false;
   for (let i = 0; i < result.alpha.length; i++) imageData.data[i * 4 + 3] = result.alpha[i];
   ctx.putImageData(imageData, 0, 0);
+  lastPaperColor = result.paperColor || null;
   return true;
+}
+
+let lastPaperColor = null; // 直前に切り抜いた絵の紙の色(色の判定で照明の色かぶりを打ち消すのに使う)
+// 切り抜いた絵の色から決めた属性。どの写真のものか分かるよう、写真のdata URLと組にして持つ
+let capturedColorElement = { url: null, element: null };
+
+/// 切り抜いた絵(canvas)の色から属性を決める。決められなければnull
+function elementFromCanvas(canvas, paperColor) {
+  try {
+    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    const result = elementFromColors(data, paperColor);
+    logDebug("絵の色から属性: " + (result ? `${result.element} (${Math.round(result.ratio * 100)}%)` : "判定できず"));
+    return result ? result.element : null;
+  } catch (e) {
+    logDebug("絵の色から属性(エラー): " + e);
+    return null;
+  }
 }
 
 /// AIで被写体を切り抜く。切り抜けた場合はtrue、使えなかった場合はfalseを返す。
@@ -1777,6 +1958,7 @@ autoCutoutBtn.addEventListener("click", async () => {
     const {canvas,ctx,mask,target}=createSelectedPhoto();
     const original=ctx.getImageData(0,0,canvas.width,canvas.height);
     let usedAi=false,usedPaper=false;
+    lastPaperColor=null;
     // 白い紙に描いた絵は、AIより紙の絵専用の方式のほうがきれいに切り抜ける
     try {usedPaper=cutoutPaperDrawing(ctx,canvas.width,canvas.height,mask);}
     catch(e) {logDebug("紙の絵の切り抜き: "+e);ctx.putImageData(original,0,0);}
@@ -1794,10 +1976,12 @@ autoCutoutBtn.addEventListener("click", async () => {
     cutoutPreviewCanvasEl.width=trimmed.width;cutoutPreviewCanvasEl.height=trimmed.height;
     cutoutPreviewCanvasEl.getContext("2d").drawImage(trimmed,0,0);
     capturedCutoutDataUrl=resizeCanvasToDataUrl(trimmed,500);
+    capturedColorElement={url:capturedCutoutDataUrl,element:elementFromCanvas(trimmed,usedPaper?lastPaperColor:null)};
     resetPhotoBounds();
     redrawSelectionBtn.style.display="inline-block";
     usePhotoBtn.style.display="inline-block";
-    setStatus(usedPaper||usedAi?"輪郭を切り抜きました。「この写真を使う」で進めます":"簡易モードで切り抜きました。結果を確認してください");
+    const elementNote=capturedColorElement.element?`絵の色から「${ELEMENT_LABELS[capturedColorElement.element]}」属性になります。`:"";
+    setStatus(elementNote+(usedPaper||usedAi?"「この写真を使う」で進めます":"簡易モードで切り抜きました。結果を確認してください"));
   } catch(e) {
     autoCutoutBtn.disabled=false;
     setStatus(e.message || "切り抜きに失敗しました。もう一度試してください", "error");
@@ -2144,7 +2328,9 @@ registerBtn.addEventListener("click", async () => {
   registerBtn.disabled = true;
   setStatus("登録中...");
 
-  const stats = generateCharacterStats(scannedCardData.seed, name);
+  // 写真を使った場合は、その絵の色で属性を決める
+  const colorElement = capturedCutoutDataUrl && capturedColorElement.url === capturedCutoutDataUrl ? capturedColorElement.element : null;
+  const stats = generateCharacterStats(scannedCardData.seed, name, colorElement);
 
   // 記録として保存しておく(将来Unity側で読み込んで使う場合などに利用できる)。
   // 保存に失敗しても、スマホ側の表示自体は続行してよい。

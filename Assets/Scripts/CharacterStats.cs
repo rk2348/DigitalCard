@@ -96,9 +96,9 @@ public class CharacterStats
     /// </summary>
     public void AssignRandomStats()
     {
-        attack = UnityEngine.Random.Range(10, 31);
-        defense = UnityEngine.Random.Range(5, 21);
+        // 攻撃・防御・素早さは合計の強さをそろえて配分する(スマホ側 docs/app.js と同じ式)
         speed = UnityEngine.Random.Range(5, 21);
+        AllocateAttackDefense(UnityEngine.Random.value);
         maxHp = 100;
         hp = maxHp;
         specialLevel = (AttackLevel)UnityEngine.Random.Range(0, 3);
@@ -119,6 +119,21 @@ public class CharacterStats
         {
             ApplyMutation();
         }
+    }
+
+    // 攻撃・防御に配分する合計(攻撃+1 = 防御+2)。対戦シミュレーションで、どの振り分けでも勝率が
+    // ほぼ同じ(大半が40〜60%)になるよう調整した値。素早さは先攻を決めるだけなので少しだけ差し引く
+    private const float StatBudget = 18f;
+    private const float DefenseCost = 0.5f;
+    private const float SpeedCost = 0.03f;
+
+    /// <summary>speedを決めた後に呼ぶ。roll(0〜1)で攻撃に回す割合(25〜75%)を決め、残りを防御に回す。</summary>
+    private void AllocateAttackDefense(float roll)
+    {
+        float budget = StatBudget - (speed - 5) * SpeedCost;
+        float attackShare = 0.25f + roll * 0.5f;
+        attack = 10 + (int)Math.Round(budget * attackShare, MidpointRounding.AwayFromZero);
+        defense = 5 + (int)Math.Round(budget * (1f - attackShare) / DefenseCost, MidpointRounding.AwayFromZero);
     }
 
     /// <summary>
@@ -151,9 +166,9 @@ public class CharacterStats
     {
         System.Random rng = new System.Random(seed);
 
-        attack = rng.Next(10, 31);
-        defense = rng.Next(5, 21);
+        // 攻撃・防御・素早さは合計の強さをそろえて配分する(スマホ側 docs/app.js と同じ式)
         speed = rng.Next(5, 21);
+        AllocateAttackDefense((float)rng.NextDouble());
         maxHp = 100;
         hp = maxHp;
         specialLevel = BattleRules.ComputeSpecialLevel(seed);
