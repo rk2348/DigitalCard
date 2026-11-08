@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>オリサモ カード印刷</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Shippori+Antique+B1&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
+    rel="stylesheet"
+  />
+  <!-- カードの見た目はスマホのページと同じものを使う -->
+  <link rel="stylesheet" href="style.css?v=0.7.6-qr" />
+  <link rel="stylesheet" href="print.css?v=1" />
+</head>
+<body class="print-site">
+  <header class="ps-header">
+    <div class="ps-title">
+      <h1>オリサモ カード印刷</h1>
+      <p id="ps-status" class="ps-status">接続しています…</p>
+    </div>
+    <div class="ps-actions">
+      <button id="ps-print" class="ps-print-btn" disabled>選んだカードを印刷</button>
+    </div>
+  </header>
+
+  <section class="ps-toolbar">
+    <label class="ps-field">
+      <span>さがす</span>
+      <input id="ps-search" type="search" placeholder="カードの名前" />
+    </label>
+    <label class="ps-field">
+      <span>表示</span>
+      <select id="ps-filter">
+        <option value="unprinted">まだ印刷していないカード</option>
+        <option value="all">すべてのカード</option>
+        <option value="printed">印刷したカード</option>
+      </select>
+    </label>
+    <label class="ps-field">
+      <span>印刷の大きさ</span>
+      <select id="ps-layout">
+        <option value="9">A4に9枚（カードサイズ 63×88mm）</option>
+        <option value="4">A4に4枚（はがきくらい）</option>
+        <option value="1">A4に1枚（大きく）</option>
+      </select>
+    </label>
+    <label class="ps-check">
+      <input id="ps-autoselect" type="checkbox" checked />
+      <span>新しく登録されたカードを自動で選ぶ</span>
+    </label>
+    <div class="ps-buttons">
+      <button id="ps-select-visible" class="ps-sub-btn">表示中をすべて選ぶ</button>
+      <button id="ps-clear" class="ps-sub-btn">選択をやめる</button>
+    </div>
+  </section>
+
+  <p class="ps-hint">カードを押すと選べます（もう一度押すと外れます）。印刷が終わったカードには「印刷済み」が付き、「まだ印刷していないカード」には出なくなります。印刷済みの記録はこのパソコンのブラウザに保存されます。</p>
+
+  <main id="ps-grid" class="ps-grid"></main>
+  <p id="ps-empty" class="ps-empty" style="display: none;">表示するカードがありません</p>
+
+  <div id="ps-toast" class="ps-toast"></div>
+
+  <!-- 印刷するのはここだけ(画面には出さない) -->
+  <div id="print-area" class="print-area"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-database-compat.js"></script>
+  <script src="vendor/qrcode.js"></script>
+  <script src="print.js?v=1"></script>
+</body>
+</html>
