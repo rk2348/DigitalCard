@@ -33,6 +33,27 @@ public class CharacterStats
     // 必殺技レベル(強/普/弱のうち1つ)。このレベルで攻撃が命中すると追加倍率とスキル効果が発動する。
     public AttackLevel specialLevel;
 
+    // ---- バトル中だけ使う状態(保存しない。試合開始時に ResetBattleState で初期化) ----
+    [NonSerialized] public int shieldHp;          // 守護結界の残り(ダメージを肩代わりする量)
+    [NonSerialized] public int defenseDebuff;     // 相手の威圧で下げられた防御力
+    [NonSerialized] public bool firstStrikeUsed;  // 先手必勝を使ったか
+    [NonSerialized] public bool enduranceUsed;    // 不屈の魂を使ったか
+
+    /// <summary>試合開始時に、バトル中だけの状態をまっさらに戻す。</summary>
+    public void ResetBattleState()
+    {
+        shieldHp = 0;
+        defenseDebuff = 0;
+        firstStrikeUsed = false;
+        enduranceUsed = false;
+    }
+
+    /// <summary>指定したスキルを持っているか。</summary>
+    public bool HasSkill(SkillType type)
+    {
+        return skill != null && skill.skillType == type;
+    }
+
     /// <summary>
     /// スマホで撮影・背景切り抜きした実物の写真(バトル画面などでの表示用)。
     /// QRコードやFirebaseへのJSONシリアライズ対象ではなく、あくまで実行時にだけ
@@ -169,29 +190,37 @@ public class CharacterStats
     }
 
     /// <summary>
-    /// スキル(PowerBoost)を加味した実質攻撃力。バトル時のダメージ計算に使用。
+    /// スキル(PowerBoost / IronFist / Desperation)を加味した実質攻撃力。バトル時のダメージ計算に使用。
     /// </summary>
     public int GetEffectiveAttack()
     {
         int value = attack;
-        if (skill != null && skill.skillType == SkillType.PowerBoost)
+        if (HasSkill(SkillType.PowerBoost))
         {
-            value += Mathf.RoundToInt(speed * skill.ratio);
+            value += Mathf.RoundToInt(speed * skill.EffectRatio);
+        }
+        else if (HasSkill(SkillType.IronFist))
+        {
+            value += Mathf.RoundToInt(defense * skill.EffectRatio);
+        }
+        else if (HasSkill(SkillType.Desperation))
+        {
+            value += Mathf.RoundToInt(Mathf.Max(0, maxHp - hp) * skill.EffectRatio);
         }
         return value;
     }
 
     /// <summary>
-    /// スキル(GuardBoost)を加味した実質防御力。バトル時のダメージ計算に使用。
+    /// スキル(GuardBoost)と相手の威圧を加味した実質防御力。バトル時のダメージ計算に使用。
     /// </summary>
     public int GetEffectiveDefense()
     {
         int value = defense;
-        if (skill != null && skill.skillType == SkillType.GuardBoost)
+        if (HasSkill(SkillType.GuardBoost))
         {
-            value += Mathf.RoundToInt(speed * skill.ratio);
+            value += Mathf.RoundToInt(speed * skill.EffectRatio);
         }
-        return value;
+        return Mathf.Max(0, value - defenseDebuff); // 威圧で下げられた分を引く
     }
 
     /// <summary>

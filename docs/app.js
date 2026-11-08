@@ -67,16 +67,47 @@ function computeSpecialLevel(seed) {
 function specialLevelOf(record) {
   return record.specialLevel || computeSpecialLevel(record.seed);
 }
-const SKILL_TYPES = ["PowerBoost", "GuardBoost", "LifeDrain", "Overdrive"];
+// C#の SkillType と同じ名前・同じ順番にする(Firebaseには名前で保存される)
+const SKILL_TYPES = [
+  "PowerBoost", "GuardBoost", "LifeDrain", "Overdrive",
+  "IronFist", "Desperation", "ElementMastery", "FirstStrike", "Evasion",
+  "Counter", "Shield", "Regeneration", "Intimidate", "Endurance",
+];
 const SKILL_NAME_MAP = {
   PowerBoost: "疾風の一撃",
   GuardBoost: "俊敏なる守り",
   LifeDrain: "生命吸収",
   Overdrive: "渾身の一打",
+  IronFist: "鉄拳の構え",
+  Desperation: "背水の陣",
+  ElementMastery: "属性の極み",
+  FirstStrike: "先手必勝",
+  Evasion: "見切り",
+  Counter: "反撃の構え",
+  Shield: "守護結界",
+  Regeneration: "自然治癒",
+  Intimidate: "威圧",
+  Endurance: "不屈の魂",
 };
 
+/// 実際に効果へ掛ける倍率(C#の CharacterSkill.EffectRatio と同じ式にすること)。
+function skillEffectRatio(skillType, ratio) {
+  switch (skillType) {
+    case "Desperation":
+    case "Evasion":
+    case "Endurance":
+      return ratio * 0.5;
+    case "FirstStrike":
+      return ratio * 2;
+    case "Shield":
+      return ratio * 3;
+    default:
+      return ratio;
+  }
+}
+
 function buildSkillDescription(skillType, ratio) {
-  const percent = Math.round(ratio * 100);
+  const percent = Math.round(skillEffectRatio(skillType, ratio) * 100);
   switch (skillType) {
     case "PowerBoost":
       return `素早さの${percent}%を攻撃力に加算`;
@@ -86,6 +117,26 @@ function buildSkillDescription(skillType, ratio) {
       return `与えたダメージの${percent}%を体力に回復`;
     case "Overdrive":
       return `攻撃力の${percent}%分、追加ダメージを与える`;
+    case "IronFist":
+      return `防御力の${percent}%を攻撃力に加算`;
+    case "Desperation":
+      return `減ったHPの${percent}%を攻撃力に加算`;
+    case "ElementMastery":
+      return `有利な属性への攻撃のダメージが${percent}%アップ`;
+    case "FirstStrike":
+      return `最初に当てた攻撃のダメージが${percent}%アップ`;
+    case "Evasion":
+      return `相手より素早いとき、受けるダメージを${percent}%軽減`;
+    case "Counter":
+      return `受けたダメージの${percent}%を相手に返す`;
+    case "Shield":
+      return `戦闘開始時、防御力の${percent}%分のダメージを防ぐ結界を張る`;
+    case "Regeneration":
+      return `自分の攻撃ターンの終わりに、防御力の${percent}%回復`;
+    case "Intimidate":
+      return `戦闘開始時、攻撃力の${percent}%分だけ相手の防御力を下げる`;
+    case "Endurance":
+      return `倒れる攻撃を1回だけ耐え、最大HPの${percent}%で踏みとどまる`;
     default:
       return "";
   }
@@ -1125,6 +1176,294 @@ function captureVisibleFrame(canvas) {
   return ctx;
 }
 
+// ==================== 白い紙に描いた絵の切り抜き ====================
+/// 白い紙に描かれたイラストを切り抜く(AIを使わない、紙の絵専用の方式)。
+/// 1. 囲みのすぐ内側(=紙)の色から、紙の色と明るさのムラ(影・照明)を推定する
+/// 2. 紙の色からどれだけ離れているか(=インクの濃さ)を画素ごとに求め、しきい値で線と塗りを取り出す
+/// 3. 線のすき間を少し埋めてから、囲みの外側から「紙」だけをたどって消す
+///    → 線で囲まれた内側(白目や薄い塗りの部分)は紙と同じ色でも残る
+/// data: RGBA(Uint8ClampedArray), inside: 囲みの内側なら1(Uint8Array)
+/// 戻り値: { paperLike, alpha(Uint8ClampedArray) | null }
+function cutoutDrawingOnPaper(data, width, height, inside) {
+  const count = width * height;
+  const size = Math.min(width, height);
+
+  // ---- 囲みの内側の「縁」(紙のはず)を集める ----
+  const dist = new Float32Array(count); // 囲みの外側までの距離(チェビシェフ近似)
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = y * width + x;
+    if (!inside[i]) continue;
+    const up = y ? dist[i - width] : 0, left = x ? dist[i - 1] : 0;
+    dist[i] = 1 + Math.min(up, left);
+  }
+  for (let y = height - 1; y >= 0; y--) for (let x = width - 1; x >= 0; x--) {
+    const i = y * width + x;
+    if (!inside[i]) continue;
+    const down = y + 1 < height ? dist[i + width] : 0, right = x + 1 < width ? dist[i + 1] : 0;
+    dist[i] = Math.min(dist[i], 1 + Math.min(down, right));
+  }
+  const band = Math.max(3, Math.round(size * 0.03));
+  const bandIdx = [];
+  for (let i = 0; i < count; i++) if (inside[i] && dist[i] <= band) bandIdx.push(i);
+  if (bandIdx.length < 50) return { paperLike: false, alpha: null };
+
+  // 紙らしいか(明るく、色味が少ない)
+  const lums = [], chromas = [];
+  for (const i of bandIdx) {
+    const p = i * 4, r = data[p], g = data[p + 1], b = data[p + 2];
+    lums.push(0.299 * r + 0.587 * g + 0.114 * b);
+    chromas.push(Math.max(r, g, b) - Math.min(r, g, b));
+  }
+  const median = (a) => { const s = Float32Array.from(a).sort(); return s[s.length >> 1]; };
+  const paperLum = median(lums), paperChroma = median(chromas);
+  const paperLike = paperLum > 110 && paperChroma < 48;
+  if (!paperLike) return { paperLike: false, alpha: null };
+
+  // ---- 紙の色のムラを2次曲面で近似(影や照明のグラデーションに対応) ----
+  // 縁の画素のうち、紙らしいもの(明るさが中央値に近い)だけで最小二乗フィット
+  const fitSamples = [];
+  const step = Math.max(1, Math.floor(bandIdx.length / 4000));
+  for (let k = 0; k < bandIdx.length; k += step) {
+    const i = bandIdx[k];
+    if (Math.abs(lums[k] - paperLum) < 40 && chromas[k] < paperChroma + 30) fitSamples.push(i);
+  }
+  const fit = fitQuadraticSurface(data, width, height, fitSamples.length >= 30 ? fitSamples : bandIdx);
+
+  // ---- インクの濃さ(紙の色からの離れ具合)を求める ----
+  const blurred = boxBlurRgb(data, width, height, 1);
+  const ink = new Float32Array(count);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = y * width + x;
+    if (!inside[i]) continue;
+    const bg = evalSurface(fit, x / width, y / height);
+    let m = 0;
+    for (let c = 0; c < 3; c++) {
+      const ratio = blurred[i * 3 + c] / Math.max(24, bg[c]);
+      m = Math.max(m, Math.abs(1 - ratio));
+    }
+    ink[i] = m;
+  }
+
+  // しきい値: 紙の部分のばらつき(縁の98%点)と、大津の方法の結果から決める
+  const bandInk = bandIdx.map((i) => ink[i]).sort((a, b) => a - b);
+  // 縁にも絵が少しかかることがあるので、中央値+ばらつき(MAD)で紙のノイズの大きさを見積もる
+  const med = bandInk[bandInk.length >> 1];
+  const mad = bandInk.map((v) => Math.abs(v - med)).sort((a, b) => a - b)[bandInk.length >> 1];
+  const noise = med + 4 * 1.4826 * mad;
+  const otsu = otsuThreshold(ink, inside);
+  const threshold = Math.min(0.16, Math.max(0.05, noise * 1.2));
+
+  let mask = new Uint8Array(count);
+  for (let i = 0; i < count; i++) if (inside[i] && ink[i] > threshold) mask[i] = 1;
+
+  // ---- 線のすき間を埋める(膨張→収縮) ----
+  const radius = Math.max(2, Math.round(size * 0.006));
+  mask = erode(dilate(mask, width, height, radius), width, height, radius);
+
+  // ---- 囲みが紙の外(机など暗い所)まではみ出していたら、その暗い部分は背景にする ----
+  const darkLimit = paperLum * 0.42;
+  const isDark = (i) => { const p = i * 4; return 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2] < darkLimit; };
+  {
+    const q = [];
+    for (let i = 0; i < count; i++) if (inside[i] && dist[i] <= 1 && isDark(i)) { q.push(i); mask[i] = 0; inside[i] = 0; }
+    while (q.length) {
+      const i = q.pop(), x = i % width, y = (i - x) / width;
+      for (const n of [x > 0 ? i - 1 : -1, x + 1 < width ? i + 1 : -1, y > 0 ? i - width : -1, y + 1 < height ? i + width : -1]) {
+        if (n >= 0 && inside[n] && isDark(n)) { inside[n] = 0; mask[n] = 0; q.push(n); }
+      }
+    }
+  }
+
+  // ---- 囲みの外側から紙だけをたどって背景とする。届かなかった所が絵 ----
+  const background = new Uint8Array(count);
+  const queue = new Int32Array(count);
+  let head = 0, tail = 0;
+  for (let i = 0; i < count; i++) if (!inside[i]) { background[i] = 1; queue[tail++] = i; }
+  // 画像の端に接している囲みの内側も、紙なら起点にする
+  for (let x = 0; x < width; x++) for (const y of [0, height - 1]) {
+    const i = y * width + x;
+    if (!background[i] && !mask[i]) { background[i] = 1; queue[tail++] = i; }
+  }
+  for (let y = 0; y < height; y++) for (const x of [0, width - 1]) {
+    const i = y * width + x;
+    if (!background[i] && !mask[i]) { background[i] = 1; queue[tail++] = i; }
+  }
+  while (head < tail) {
+    const i = queue[head++], x = i % width, y = (i - x) / width;
+    if (x > 0) visit(i - 1);
+    if (x + 1 < width) visit(i + 1);
+    if (y > 0) visit(i - width);
+    if (y + 1 < height) visit(i + width);
+  }
+  function visit(n) {
+    if (background[n] || mask[n]) return;
+    background[n] = 1; queue[tail++] = n;
+  }
+
+  // ---- 縁に残った紙の白いふちを2画素ぶん削る ----
+  for (let pass = 0; pass < 2; pass++) {
+    const drop = [];
+    for (let i = 0; i < count; i++) {
+      if (background[i] || ink[i] > threshold * 0.8) continue;
+      const x = i % width;
+      if ((x > 0 && background[i - 1]) || (x + 1 < width && background[i + 1]) ||
+          (i >= width && background[i - width]) || (i + width < count && background[i + width])) drop.push(i);
+    }
+    for (const i of drop) background[i] = 1;
+  }
+
+  // ---- 小さなゴミ(紙のシミ、離れた文字など)を消す ----
+  const fg = new Uint8Array(count);
+  for (let i = 0; i < count; i++) fg[i] = background[i] ? 0 : 1;
+  const labels = new Int32Array(count).fill(-1);
+  const areas = [];
+  for (let s = 0; s < count; s++) {
+    if (!fg[s] || labels[s] >= 0) continue;
+    const id = areas.length;
+    let h = 0, t = 1; queue[0] = s; labels[s] = id;
+    while (h < t) {
+      const i = queue[h++], x = i % width, y = (i - x) / width;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const n = ny * width + nx;
+        if (fg[n] && labels[n] < 0) { labels[n] = id; queue[t++] = n; }
+      }
+    }
+    areas.push(t);
+  }
+  if (areas.length === 0) return { paperLike: true, alpha: null };
+  const largest = Math.max(...areas);
+  const keep = areas.map((a) => a >= largest * 0.04);
+  let kept = 0, insideCount = 0;
+  for (let i = 0; i < count; i++) {
+    if (inside[i]) insideCount++;
+    if (fg[i] && keep[labels[i]]) kept++; else fg[i] = 0;
+  }
+  if (kept < insideCount * 0.01 || kept > insideCount * 0.97) return { paperLike: true, alpha: null };
+
+  // ---- 境界を1画素だけなめらかにする ----
+  const alpha = new Uint8ClampedArray(count);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = y * width + x;
+    let sum = 0, n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      sum += fg[ny * width + nx]; n++;
+    }
+    alpha[i] = fg[i] ? Math.round(255 * Math.max(0.55, sum / n)) : Math.round(255 * Math.min(0.3, sum / n * 0.5));
+  }
+  return { paperLike: true, alpha, threshold };
+}
+
+// 2次曲面 c0 + c1 x + c2 y + c3 x^2 + c4 xy + c5 y^2 をRGBそれぞれに当てはめる
+function fitQuadraticSurface(data, width, height, samples) {
+  const A = Array.from({ length: 6 }, () => new Float64Array(6));
+  const B = [new Float64Array(6), new Float64Array(6), new Float64Array(6)];
+  for (const i of samples) {
+    const x = (i % width) / width, y = Math.floor(i / width) / height;
+    const f = [1, x, y, x * x, x * y, y * y];
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) A[r][c] += f[r] * f[c];
+      for (let ch = 0; ch < 3; ch++) B[ch][r] += f[r] * data[i * 4 + ch];
+    }
+  }
+  for (let r = 0; r < 6; r++) A[r][r] += 1e-6 * samples.length; // 縁が偏っていても破綻しないよう少しだけ正則化
+  return B.map((b) => solve6(A, b));
+}
+function evalSurface(fit, x, y) {
+  const f = [1, x, y, x * x, x * y, y * y];
+  return fit.map((c) => c.reduce((s, v, k) => s + v * f[k], 0));
+}
+function solve6(A0, b0) {
+  const n = 6, A = A0.map((r) => Float64Array.from(r)), b = Float64Array.from(b0);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+    const d = A[c][c] || 1e-12;
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const k = A[r][c] / d;
+      for (let cc = c; cc < n; cc++) A[r][cc] -= k * A[c][cc];
+      b[r] -= k * b[c];
+    }
+  }
+  return Array.from(b, (v, i) => v / (A[i][i] || 1e-12));
+}
+function boxBlurRgb(data, width, height, r) {
+  const out = new Float32Array(width * height * 3);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let s0 = 0, s1 = 0, s2 = 0, n = 0;
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const p = (ny * width + nx) * 4;
+      s0 += data[p]; s1 += data[p + 1]; s2 += data[p + 2]; n++;
+    }
+    const o = (y * width + x) * 3;
+    out[o] = s0 / n; out[o + 1] = s1 / n; out[o + 2] = s2 / n;
+  }
+  return out;
+}
+function otsuThreshold(values, inside) {
+  const bins = 256, hist = new Float64Array(bins);
+  let total = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (!inside[i]) continue;
+    hist[Math.min(bins - 1, Math.floor(Math.min(1, values[i]) * (bins - 1)))]++; total++;
+  }
+  let sum = 0; for (let i = 0; i < bins; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, best = 0, bestT = 0;
+  for (let t = 0; t < bins; t++) {
+    wB += hist[t]; if (!wB) continue;
+    const wF = total - wB; if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > best) { best = between; bestT = t; }
+  }
+  return bestT / (bins - 1);
+}
+// 正方形の膨張・収縮(横→縦の2回に分けて高速化)
+function morph(mask, width, height, r, isDilate) {
+  const tmp = new Uint8Array(mask.length), out = new Uint8Array(mask.length);
+  const pass = (src, dst, horizontal) => {
+    const len = horizontal ? width : height, lines = horizontal ? height : width;
+    for (let l = 0; l < lines; l++) {
+      for (let k = 0; k < len; k++) {
+        let v = isDilate ? 0 : 1;
+        for (let d = -r; d <= r; d++) {
+          const kk = k + d;
+          if (kk < 0 || kk >= len) { if (!isDilate) { v = 0; break; } continue; }
+          const idx = horizontal ? l * width + kk : kk * width + l;
+          if (isDilate) { if (src[idx]) { v = 1; break; } } else if (!src[idx]) { v = 0; break; }
+        }
+        dst[horizontal ? l * width + k : k * width + l] = v;
+      }
+    }
+  };
+  pass(mask, tmp, true); pass(tmp, out, false);
+  return out;
+}
+function dilate(mask, w, h, r) { return morph(mask, w, h, r, true); }
+function erode(mask, w, h, r) { return morph(mask, w, h, r, false); }
+
+/// 囲んだ範囲が白い紙なら、紙に描いた絵専用の方式で切り抜く。切り抜けたらtrue。
+function cutoutPaperDrawing(ctx, width, height, selectionMask) {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const maskPixels = selectionMask.getContext("2d").getImageData(0, 0, width, height).data;
+  const inside = new Uint8Array(width * height);
+  for (let i = 0; i < inside.length; i++) inside[i] = maskPixels[i * 4 + 3] >= 128 ? 1 : 0;
+  const result = cutoutDrawingOnPaper(imageData.data, width, height, inside);
+  logDebug(`紙の絵の切り抜き: 紙=${result.paperLike} しきい値=${result.threshold ? result.threshold.toFixed(3) : "-"} 成功=${!!result.alpha}`);
+  if (!result.alpha) return false;
+  for (let i = 0; i < result.alpha.length; i++) imageData.data[i * 4 + 3] = result.alpha[i];
+  ctx.putImageData(imageData, 0, 0);
+  return true;
+}
+
 /// AIで被写体を切り抜く。切り抜けた場合はtrue、使えなかった場合はfalseを返す。
 async function removeBackgroundWithAi(ctx, width, height, target, selectionMask = null) {
   const segmenter = await loadSegmenter();
@@ -1437,10 +1776,15 @@ autoCutoutBtn.addEventListener("click", async () => {
   try {
     const {canvas,ctx,mask,target}=createSelectedPhoto();
     const original=ctx.getImageData(0,0,canvas.width,canvas.height);
-    let usedAi=false;
-    try {usedAi=await removeBackgroundWithAi(ctx,canvas.width,canvas.height,target,mask);}
-    catch(e) {logDebug("切り抜き: "+e);}
-    if(!usedAi) {ctx.putImageData(original,0,0);removeBackground(ctx,canvas.width,canvas.height);}
+    let usedAi=false,usedPaper=false;
+    // 白い紙に描いた絵は、AIより紙の絵専用の方式のほうがきれいに切り抜ける
+    try {usedPaper=cutoutPaperDrawing(ctx,canvas.width,canvas.height,mask);}
+    catch(e) {logDebug("紙の絵の切り抜き: "+e);ctx.putImageData(original,0,0);}
+    if(!usedPaper) {
+      try {usedAi=await removeBackgroundWithAi(ctx,canvas.width,canvas.height,target,mask);}
+      catch(e) {logDebug("切り抜き: "+e);}
+      if(!usedAi) {ctx.putImageData(original,0,0);removeBackground(ctx,canvas.width,canvas.height);}
+    }
     ctx.globalCompositeOperation="destination-in";
     ctx.drawImage(mask,0,0);
     ctx.globalCompositeOperation="source-over";
@@ -1453,7 +1797,7 @@ autoCutoutBtn.addEventListener("click", async () => {
     resetPhotoBounds();
     redrawSelectionBtn.style.display="inline-block";
     usePhotoBtn.style.display="inline-block";
-    setStatus(usedAi?"輪郭を切り抜きました。「この写真を使う」で進めます":"簡易モードで切り抜きました。結果を確認してください");
+    setStatus(usedPaper||usedAi?"輪郭を切り抜きました。「この写真を使う」で進めます":"簡易モードで切り抜きました。結果を確認してください");
   } catch(e) {
     autoCutoutBtn.disabled=false;
     setStatus(e.message || "切り抜きに失敗しました。もう一度試してください", "error");

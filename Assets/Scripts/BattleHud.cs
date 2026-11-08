@@ -429,6 +429,9 @@ public sealed class BattleHud : MonoBehaviour
         private readonly TextMeshProUGUI roleText;
         private readonly TextMeshProUGUI statusText;
         private readonly TextMeshProUGUI affinityText;
+        private readonly CharacterStats stats;
+        private readonly TextMeshProUGUI statLine;
+        private string statLineCache;
         private const float BarWidth = 1060f;
         private float target = 1f;
         private float shown = 1f;
@@ -442,10 +445,10 @@ public sealed class BattleHud : MonoBehaviour
             TextAlignmentOptions align = rightSide ? TextAlignmentOptions.Right : TextAlignmentOptions.Left;
 
             Root = OrisamoUI.CreateOrnatePanel(label, parent, OrisamoUI.PanelFill, OrisamoUI.Gold, false);
-            OrisamoUI.Place(Root, anchor, new Vector2(70f * s, -60f), new Vector2(1500f, 340f));
+            OrisamoUI.Place(Root, anchor, new Vector2(70f * s, -60f), new Vector2(1500f, 490f));
 
             Image accent = OrisamoUI.CreateImage("Accent", Root, OrisamoUI.RoundedFlat, color, true);
-            OrisamoUI.Place(accent.rectTransform, new Vector2(anchor.x, 0.5f), new Vector2(18f * s, 0f), new Vector2(14f, 260f));
+            OrisamoUI.Place(accent.rectTransform, new Vector2(anchor.x, 0.5f), new Vector2(18f * s, 0f), new Vector2(14f, 410f));
 
             RectTransform emblem = OrisamoUI.CreateElementEmblem(Root, stats.element, 210f);
             OrisamoUI.Place(emblem, new Vector2(anchor.x, 0.5f), new Vector2(60f * s, 0f), emblem.sizeDelta);
@@ -498,11 +501,26 @@ public sealed class BattleHud : MonoBehaviour
             Image frame = OrisamoUI.CreateImage("Frame", bar, OrisamoUI.RoundedFrame, OrisamoUI.WithAlpha(OrisamoUI.Gold, 0.85f), true);
             OrisamoUI.Stretch(frame.rectTransform, -6f);
 
-            string special = OrisamoUI.LevelKanji(stats.specialLevel);
-            TextMeshProUGUI statsText = OrisamoUI.CreateText("Stats", Root,
-                $"ATK <b>{stats.attack}</b>　DEF <b>{stats.defense}</b>　SPD <b>{stats.speed}</b>　<color=#F8CF70>必殺「{special}」</color>",
-                42f, OrisamoUI.Muted, align);
-            OrisamoUI.Place(statsText.rectTransform, anchor, new Vector2(textX, -292f), new Vector2(1100f, 56f));
+            // ステータス(スキルや威圧で変わった分は (+5) のように色付きで出す。試合中も自動で更新)
+            this.stats = stats;
+            statLine = OrisamoUI.CreateText("Stats", Root, "", 52f, OrisamoUI.Parchment, align, FontStyles.Bold);
+            OrisamoUI.Place(statLine.rectTransform, anchor, new Vector2(textX, -300f), new Vector2(1100f, 66f));
+            statLine.enableAutoSizing = true;
+            statLine.fontSizeMin = 32f;
+            statLine.fontSizeMax = 52f;
+            OrisamoUI.ApplyOutline(statLine, OrisamoUI.Ink, 0.15f, new Color(0f, 0f, 0f, 0.5f));
+            RefreshStats();
+
+            Image divider = OrisamoUI.CreateImage("Divider", Root, OrisamoUI.RoundedFlat, OrisamoUI.WithAlpha(OrisamoUI.Gold, 0.35f), true);
+            OrisamoUI.Place(divider.rectTransform, anchor, new Vector2(textX, -378f), new Vector2(1100f, 3f));
+
+            // 必殺技(=スキル)の名前・発動する強さ・効果
+            TextMeshProUGUI skillText = OrisamoUI.CreateText("Skill", Root, BuildSkillText(stats), 42f, OrisamoUI.Parchment, align);
+            OrisamoUI.Place(skillText.rectTransform, anchor, new Vector2(textX, -388f), new Vector2(1100f, 96f));
+            skillText.textWrappingMode = TextWrappingModes.Normal;
+            skillText.enableAutoSizing = true;
+            skillText.fontSizeMin = 28f;
+            skillText.fontSizeMax = 42f;
 
             // 役割の表示(パネルの下)
             roleRoot = OrisamoUI.CreateRect("Role", Root);
@@ -546,8 +564,43 @@ public sealed class BattleHud : MonoBehaviour
             statusText.text = status;
         }
 
+        /// <summary>現在のステータス表示を作り直す(変化がなければ何もしない)。</summary>
+        private void RefreshStats()
+        {
+            int attack = stats.GetEffectiveAttack();
+            int defense = stats.GetEffectiveDefense();
+            string tags = "";
+            if (stats.shieldHp > 0) tags += $"　<color=#7FC4FF>結界 {stats.shieldHp}</color>";
+            if (stats.HasSkill(SkillType.Endurance) && !stats.enduranceUsed) tags += "　<color=#F8CF70>不屈 残1</color>";
+            if (stats.HasSkill(SkillType.FirstStrike) && !stats.firstStrikeUsed) tags += "　<color=#F8CF70>先手 残1</color>";
+            string text = $"{StatChip("攻撃", stats.attack, attack)}　{StatChip("防御", stats.defense, defense)}　{StatChip("素早さ", stats.speed, stats.speed)}{tags}";
+            if (text == statLineCache) return;
+            statLineCache = text;
+            statLine.text = text;
+        }
+
+        private static string StatChip(string label, int baseValue, int effective)
+        {
+            string diff = effective > baseValue ? $"<color=#7CFF8A><size=70%>(+{effective - baseValue})</size></color>"
+                : effective < baseValue ? $"<color=#FF7A6E><size=70%>(-{baseValue - effective})</size></color>"
+                : "";
+            return $"<color=#F8CF70><size=75%>{label}</size></color> {effective}{diff}";
+        }
+
+        private static string BuildSkillText(CharacterStats stats)
+        {
+            string level = OrisamoUI.LevelKanji(stats.specialLevel);
+            if (stats.skill == null)
+            {
+                return $"<color=#F8CF70><b>必殺技</b></color>　<size=85%>「{level}」で当てると威力アップ</size>";
+            }
+            return $"<color=#F8CF70><b>必殺技「{stats.skill.skillName}」</b></color>　<size=85%>「{level}」で当てると発動</size>\n" +
+                   $"<size=85%><color=#D8D0BC>{stats.skill.GetDescription()}</color></size>";
+        }
+
         public void Tick(float deltaTime)
         {
+            RefreshStats();
             shown = Mathf.MoveTowards(shown, target, deltaTime * 1.4f);
             if (trailDelay > 0f) trailDelay -= deltaTime;
             else trailValue = Mathf.MoveTowards(trailValue, shown, deltaTime * 0.6f);
