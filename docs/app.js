@@ -1952,6 +1952,7 @@ const refineToolsEl = document.getElementById("refine-tools");
 const refineAddBtn = document.getElementById("refine-add-btn");
 const refineEraseBtn = document.getElementById("refine-erase-btn");
 const refineUndoBtn = document.getElementById("refine-undo-btn");
+const refineRestoreAllBtn = document.getElementById("refine-restore-all-btn");
 let refine = null; // { w, h, rgba, alpha, base(元の写真), mode, history, paperColor }
 let refinePointer = null, refineStroke = [], refineTmp = null;
 
@@ -1963,7 +1964,15 @@ function startRefine(canvas, originalImageData, paperColor) {
   base.getContext("2d").putImageData(originalImageData, 0, 0);
   const alpha = new Uint8ClampedArray(w * h);
   for (let i = 0; i < w * h; i++) alpha[i] = data[i * 4 + 3];
-  refine = { w, h, rgba: new Uint8ClampedArray(data), alpha, base, mode: "add", history: [], paperColor };
+  // 色は「元の写真」を使う。透明にした画素はブラウザの仕組みで色が消えて(黒になって)いるので、
+  // 切り抜き結果の色を使うのは、ある程度見えている画素(縁の白っぽさを直した所を含む)だけにする
+  const orig = originalImageData.data;
+  const rgba = new Uint8ClampedArray(orig);
+  for (let i = 0; i < w * h; i++) {
+    if (data[i * 4 + 3] >= 32) { rgba[i * 4] = data[i * 4]; rgba[i * 4 + 1] = data[i * 4 + 1]; rgba[i * 4 + 2] = data[i * 4 + 2]; }
+    rgba[i * 4 + 3] = 255;
+  }
+  refine = { w, h, rgba, alpha, base, mode: "add", history: [], paperColor };
   cutoutPreviewCanvasEl.width = w;
   cutoutPreviewCanvasEl.height = h;
   cutoutPreviewCanvasEl.classList.remove("selecting");
@@ -2162,6 +2171,16 @@ refineAddBtn.addEventListener("click", () => {
 refineEraseBtn.addEventListener("click", () => {
   setRefineMode("erase");
   setStatus("残ってしまった余分な所を指でなぞると、その部分を消します");
+});
+refineRestoreAllBtn.addEventListener("click", () => {
+  // AIが切り抜いた所をすべて元の写真に戻す(切り抜く前の写真をそのまま使う)。「1つ戻す」で切り抜き後に戻れる
+  if (!refine) return;
+  refine.history.push(new Uint8ClampedArray(refine.alpha));
+  if (refine.history.length > 20) refine.history.shift();
+  refine.alpha.fill(255);
+  renderRefine();
+  commitRefine();
+  setStatus("切り抜く前の写真に戻しました。「1つ戻す」で切り抜いた状態に戻せます");
 });
 refineUndoBtn.addEventListener("click", () => {
   if (!refine || !refine.history.length) return;

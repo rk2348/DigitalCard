@@ -1656,3 +1656,4 @@ h1 {
 }
 .refine-tool.active { color: #241606; background: linear-gradient(180deg, #ffe08a, #f2b636); border-color: #f7cf70; }
 .refine-tool.refine-undo:disabled { opacity: 0.4; }
+.refine-tool.refine-restore { flex-basis: 100%; font-size: 0.85rem; }
