@@ -6,7 +6,7 @@
 
 // アプリのバージョン。Unity側(Player Settings の Version)と同じ番号にそろえておく。
 // 上げる時は index.html の style.css?v= / app.js?v= も同じ番号にする(スマホに古いファイルが残らないように)。
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.7.3";
 document.getElementById("app-version").textContent = "ver " + APP_VERSION;
 
 const firebaseConfig = {
@@ -199,6 +199,8 @@ const battleTurnNormalBtn = document.getElementById("battle-turn-normal-btn");
 const battleTurnWeakBtn = document.getElementById("battle-turn-weak-btn");
 const battleTurnResultEl = document.getElementById("battle-turn-result");
 const battleTurnHomeBtn = document.getElementById("battle-turn-home-btn");
+const battleTurnRecordEl = document.getElementById("battle-turn-record");
+const battleWinCardBtn = document.getElementById("battle-win-card-btn");
 const devPanelEl = document.getElementById("dev-panel");
 const devCardIdInput = document.getElementById("dev-card-id");
 const devRegisterBtn = document.getElementById("dev-register-btn");
@@ -413,9 +415,13 @@ function currentUid() {
 
 /// キャラクター作成モードを開始する: ホームを隠してQRリーダーを表示する。
 function startCreateMode() {
+  goHome();
   appMode = "create";
   homeSectionEl.style.display = "none";
-  beginScanning("キャラクターにするカードのQRコードをカメラにかざしてください");
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  scannedCardData = { cardId: Array.from(bytes, b => b.toString(16).padStart(2, "0")).join(""), seed: randomSeed(), dataVersion: 1 };
+  showPhotoCapture(scannedCardData);
+  backToHomeBtn.style.display = "inline-block";
 }
 
 /// 対戦開始モードを開始する: ホームを隠してQRリーダーを表示する。
@@ -478,7 +484,7 @@ function stopScanner() {
   scanner = null;
   scannerStartPromise = null;
   // カメラの起動中に止めるとライブラリが例外を出すため、起動が終わってから止める
-  starting
+  return starting
     .then(() => runningScanner.stop())
     .then(() => runningScanner.clear())
     .catch((e) => logDebug("エラー(スキャナー停止): " + e));
@@ -755,7 +761,7 @@ function setBattleStatus(text, type = "info") {
 }
 
 /// カード読み取り直後、実物を撮影して背景を切り抜く画面を表示する
-function showPhotoCapture(cardData) {
+async function showPhotoCapture(cardData) {
   isAwaitingName = true;
 
   photoCardIdEl.textContent = cardData.cardId;
@@ -763,17 +769,20 @@ function showPhotoCapture(cardData) {
   // 表示状態を初期化(2回目以降のスキャンでも正しく表示されるように)
   photoVideoEl.style.display = "block";
   cutoutPreviewCanvasEl.style.display = "none";
-  photoTargetEl.style.display = "block";
+  photoTargetEl.style.display = "none";
   capturePhotoBtn.style.display = "inline-block";
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
-  setPhotoTarget(0.5, 0.5);
+  resetPhotoBounds();
 
   hideReader();
   nameInputSectionEl.style.display = "none";
   photoCaptureSectionEl.style.display = "block";
-  setStatus("キャラクターをタップして選んでから撮影してください");
+  setStatus("\u307e\u305a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u3092\u64ae\u5f71\u3057\u3066\u304f\u3060\u3055\u3044");
 
+  // Mobile browsers may reject a second camera stream until the QR reader releases it.
+  await stopScanner();
+  if (photoCaptureSectionEl.style.display === "none" || !isAwaitingName) return;
   startPhotoCamera();
   loadSegmenter(); // 撮影までにAIモデルを読み込んでおく
 }
@@ -782,19 +791,23 @@ function showPhotoCapture(cardData) {
 /// QRスキャン用のHtml5Qrcodeとは別に、videoタグへ直接映像を流し込む。
 function startPhotoCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    setStatus("このブラウザは撮影に対応していません。「写真なしで進める」を押してください", "error");
+    setStatus("画像ファイルを選ぶか、「写真なしで進む」を押してください", "error");
     return;
   }
 
   navigator.mediaDevices
     .getUserMedia({ video: { facingMode: "environment" }, audio: false })
     .then((stream) => {
+      if (photoCaptureSectionEl.style.display === "none" || selectingPhoto) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
       photoStream = stream;
       photoVideoEl.srcObject = stream;
     })
     .catch((e) => {
       logDebug("エラー(撮影用カメラ起動): " + e);
-      setStatus("カメラを起動できませんでした。「写真なしで進める」を押してください", "error");
+      if (!selectingPhoto) setStatus("カメラを起動できませんでした。画像ファイルを選ぶか、「写真なしで進む」を押してください", "error");
     });
 }
 
@@ -979,14 +992,120 @@ function setPhotoTarget(x, y) {
   photoTargetEl.style.top = photoTarget.y * 100 + "%";
 }
 
-photoFrameEl.addEventListener("click", (event) => {
-  if (photoVideoEl.style.display === "none") return; // 切り抜き結果の表示中は動かさない
-  const rect = photoFrameEl.getBoundingClientRect();
-  setPhotoTarget((event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height);
-});
+const selectionCanvas = document.getElementById("selection-canvas");
+const autoCutoutBtn = document.getElementById("auto-cutout-btn");
+const redrawSelectionBtn = document.getElementById("redraw-selection-btn");
+let selectionPoints = [], selectionPointer = null, selectingPhoto = false, cutoutBusy = false;
 
-/// 撮影枠に見えている範囲(videoはobject-fit: coverで枠いっぱいに拡大されている)だけを
-/// キャンバスに切り出す。推論が重くならないよう最大辺をSEGMENT_MAX_DIMENSIONに縮める。
+function resetPhotoBounds() {
+  selectingPhoto = false;
+  selectionPoints = [];
+  selectionPointer = null;
+  selectionCanvas.style.display = "none";
+  autoCutoutBtn.style.display = "none";
+  redrawSelectionBtn.style.display = "none";
+  autoCutoutBtn.disabled = true;
+  capturePhotoBtn.disabled = false;
+  photoTargetEl.style.display = "none";
+  cutoutPreviewCanvasEl.classList.remove("selecting");
+}
+function drawSelection() {
+  const ctx = selectionCanvas.getContext("2d");
+  ctx.clearRect(0, 0, selectionCanvas.width, selectionCanvas.height);
+  if (!selectionPoints.length) return;
+  ctx.beginPath();
+  selectionPoints.forEach((p,i) => i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y));
+  if (selectionPointer === null) ctx.closePath();
+  ctx.fillStyle = "rgba(247,207,112,0.18)";
+  ctx.fill();
+  ctx.strokeStyle = "#f7cf70";
+  ctx.lineWidth = Math.max(3,selectionCanvas.width/160);
+  ctx.stroke();
+}
+function selectionPoint(e) {
+  const r = selectionCanvas.getBoundingClientRect();
+  return {x:Math.max(0,Math.min(selectionCanvas.width,(e.clientX-r.left)/r.width*selectionCanvas.width)),
+    y:Math.max(0,Math.min(selectionCanvas.height,(e.clientY-r.top)/r.height*selectionCanvas.height))};
+}
+selectionCanvas.addEventListener("pointerdown", e => {
+  if (!selectingPhoto || cutoutBusy || selectionPointer !== null) return;
+  e.preventDefault();
+  selectionPointer = e.pointerId;
+  selectionCanvas.setPointerCapture(e.pointerId);
+  selectionPoints = [selectionPoint(e)];
+  autoCutoutBtn.disabled = true;
+  drawSelection();
+});
+selectionCanvas.addEventListener("pointermove", e => {
+  if (e.pointerId !== selectionPointer) return;
+  const p = selectionPoint(e), last = selectionPoints[selectionPoints.length-1];
+  if (Math.hypot(p.x-last.x,p.y-last.y)<3) return;
+  selectionPoints.push(p);
+  drawSelection();
+});
+selectionCanvas.addEventListener("pointerup", e => {
+  if (e.pointerId !== selectionPointer) return;
+  selectionPoints.push(selectionPoint(e));
+  selectionPointer = null;
+  let area = 0;
+  selectionPoints.forEach((p,i) => {const q=selectionPoints[(i+1)%selectionPoints.length];area+=p.x*q.y-q.x*p.y;});
+  autoCutoutBtn.disabled = selectionPoints.length<4 || Math.abs(area)/2<selectionCanvas.width*selectionCanvas.height*0.005;
+  drawSelection();
+  setStatus(autoCutoutBtn.disabled ? "キャラクター全体の周りを、もう少し大きく囲んでください" : "囲みの内側を自動で切り抜けます。なぞり直すと囲みを変更できます");
+});
+selectionCanvas.addEventListener("pointercancel", () => {
+  selectionPointer=null; selectionPoints=[]; autoCutoutBtn.disabled=true; drawSelection();
+});
+function showPhotoSelection() {
+  capturedCutoutDataUrl=null;
+  selectingPhoto=true;
+  selectionPoints=[];
+  selectionPointer=null;
+  cutoutPreviewCanvasEl.width=photoCaptureCanvasEl.width;
+  cutoutPreviewCanvasEl.height=photoCaptureCanvasEl.height;
+  cutoutPreviewCanvasEl.getContext("2d").drawImage(photoCaptureCanvasEl,0,0);
+  cutoutPreviewCanvasEl.classList.add("selecting");
+  cutoutPreviewCanvasEl.style.display="block";
+  selectionCanvas.width=photoCaptureCanvasEl.width;
+  selectionCanvas.height=photoCaptureCanvasEl.height;
+  selectionCanvas.style.display="block";
+  autoCutoutBtn.style.display="inline-block";
+  autoCutoutBtn.disabled=true;
+  redrawSelectionBtn.style.display="none";
+  usePhotoBtn.style.display="none";
+  setStatus("写真のキャラクター全体の少し外側を、指でぐるっとなぞってください。指を離すと囲みが閉じます");
+}
+redrawSelectionBtn.addEventListener("click",showPhotoSelection);
+
+function createSelectedPhoto() {
+  let left=Infinity,top=Infinity,right=0,bottom=0;
+  for(const p of selectionPoints) {left=Math.min(left,p.x);top=Math.min(top,p.y);right=Math.max(right,p.x);bottom=Math.max(bottom,p.y);}
+  left=Math.floor(left);top=Math.floor(top);right=Math.ceil(right);bottom=Math.ceil(bottom);
+  const canvas=document.createElement("canvas");
+  canvas.width=Math.max(1,right-left);canvas.height=Math.max(1,bottom-top);
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(photoCaptureCanvasEl,left,top,canvas.width,canvas.height,0,0,canvas.width,canvas.height);
+  const mask=document.createElement("canvas");mask.width=canvas.width;mask.height=canvas.height;
+  const m=mask.getContext("2d");m.beginPath();
+  selectionPoints.forEach((p,i)=>i?m.lineTo(p.x-left,p.y-top):m.moveTo(p.x-left,p.y-top));
+  m.closePath();m.fillStyle="white";m.fill();
+  // Pick an interior point far from the boundary, including for concave selections.
+  const pixels=m.getImageData(0,0,mask.width,mask.height).data;
+  const distance=new Float32Array(mask.width*mask.height);
+  let best=0;
+  for(let y=0;y<mask.height;y++) for(let x=0;x<mask.width;x++) {
+    const i=y*mask.width+x;
+    if(pixels[i*4+3]<128) continue;
+    distance[i]=1+Math.min(x?distance[i-1]:0,y?distance[i-mask.width]:0);
+  }
+  for(let y=mask.height-1;y>=0;y--) for(let x=mask.width-1;x>=0;x--) {
+    const i=y*mask.width+x;if(!distance[i]) continue;
+    distance[i]=Math.min(distance[i],1+Math.min(x+1<mask.width?distance[i+1]:0,y+1<mask.height?distance[i+mask.width]:0));
+    if(distance[i]>distance[best]) best=i;
+  }
+  return {canvas,ctx,mask,target:{x:((best%mask.width)+0.5)/mask.width,y:(Math.floor(best/mask.width)+0.5)/mask.height}};
+}
+
 function captureVisibleFrame(canvas) {
   const vw = photoVideoEl.videoWidth;
   const vh = photoVideoEl.videoHeight;
@@ -1007,7 +1126,7 @@ function captureVisibleFrame(canvas) {
 }
 
 /// AIで被写体を切り抜く。切り抜けた場合はtrue、使えなかった場合はfalseを返す。
-async function removeBackgroundWithAi(ctx, width, height, target) {
+async function removeBackgroundWithAi(ctx, width, height, target, selectionMask = null) {
   const segmenter = await loadSegmenter();
   if (!segmenter) return false;
 
@@ -1030,129 +1149,81 @@ async function removeBackgroundWithAi(ctx, width, height, target) {
   }
   if (result.close) result.close();
 
+  // Apply the actual lasso before connected-component analysis, not just after it.
+  if (selectionMask) {
+    const roi=document.createElement("canvas");roi.width=maskWidth;roi.height=maskHeight;
+    const rc=roi.getContext("2d");rc.drawImage(selectionMask,0,0,maskWidth,maskHeight);
+    const pixels=rc.getImageData(0,0,maskWidth,maskHeight).data;
+    for(let i=0;i<confidence.length;i++) confidence[i]*=pixels[i*4+3]/255;
+  }
   const alpha = refineMaskToAlpha(confidence, maskWidth, maskHeight, tx, ty);
   if (!alpha) return false;
 
-  const imageData = ctx.getImageData(0, 0, width, height);
-  const data = imageData.data;
-  for (let y = 0; y < height; y++) {
-    const my = Math.min(maskHeight - 1, Math.floor((y * maskHeight) / height));
-    for (let x = 0; x < width; x++) {
-      const mx = Math.min(maskWidth - 1, Math.floor((x * maskWidth) / width));
-      data[(y * width + x) * 4 + 3] = alpha[my * maskWidth + mx];
-    }
-  }
-  ctx.putImageData(imageData, 0, 0);
+  // Smoothly resample the low-resolution mask instead of copying nearest pixels.
+  const alphaCanvas=document.createElement("canvas");
+  alphaCanvas.width=maskWidth;alphaCanvas.height=maskHeight;
+  const ac=alphaCanvas.getContext("2d"), image=ac.createImageData(maskWidth,maskHeight);
+  for(let i=0;i<alpha.length;i++) {image.data[i*4]=255;image.data[i*4+1]=255;image.data[i*4+2]=255;image.data[i*4+3]=alpha[i];}
+  ac.putImageData(image,0,0);
+  ctx.save();
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
+  ctx.globalCompositeOperation="destination-in";
+  ctx.drawImage(alphaCanvas,0,0,width,height);
+  ctx.restore();
   return true;
 }
 
 /// 確信度マスク(0〜1)を整えてアルファ値(0〜255)にする。
-/// 1. タップ位置を含むひとかたまり(なければ最大のかたまり)だけを残し、離れた誤検出を消す
-/// 2. かたまりの内側にある小さな穴を埋める
-/// 3. 境界は確信度に応じた半透明にして、なめらかにする
-/// 被写体がほとんど見つからない場合はnullを返す。
+// Hysteresis keeps uncertain thin edges only when connected to confident foreground.
+// Eight-way connectivity preserves diagonal paper folds and narrow limbs.
 function refineMaskToAlpha(confidence, width, height, tx, ty) {
-  const count = width * height;
-  const solid = new Uint8Array(count);
-  for (let i = 0; i < count; i++) solid[i] = confidence[i] >= 0.5 ? 1 : 0;
-
-  // 前景のかたまりにラベルを付ける
-  const label = new Int32Array(count);
-  const sizes = [0];
-  const queue = new Int32Array(count);
-  for (let start = 0; start < count; start++) {
-    if (!solid[start] || label[start]) continue;
-    const id = sizes.length;
-    let head = 0,
-      tail = 0,
-      size = 0;
-    queue[tail++] = start;
-    label[start] = id;
-    while (head < tail) {
-      const i = queue[head++];
-      size++;
-      const x = i % width;
-      if (x > 0 && solid[i - 1] && !label[i - 1]) { label[i - 1] = id; queue[tail++] = i - 1; }
-      if (x < width - 1 && solid[i + 1] && !label[i + 1]) { label[i + 1] = id; queue[tail++] = i + 1; }
-      if (i >= width && solid[i - width] && !label[i - width]) { label[i - width] = id; queue[tail++] = i - width; }
-      if (i < count - width && solid[i + width] && !label[i + width]) { label[i + width] = id; queue[tail++] = i + width; }
-    }
-    sizes.push(size);
-  }
-
-  let keep = label[ty * width + tx];
-  if (!keep) {
-    for (let id = 1; id < sizes.length; id++) if (!keep || sizes[id] > sizes[keep]) keep = id;
-  }
-  if (!keep || sizes[keep] < count * 0.005) return null;
-
-  // 残すかたまりの外側(画面の縁から届く背景)を調べ、届かない背景=内側の穴を見つける
-  const outside = new Uint8Array(count);
-  let head = 0,
-    tail = 0;
-  const pushOutside = (i) => {
-    if (!outside[i] && label[i] !== keep) { outside[i] = 1; queue[tail++] = i; }
-  };
-  for (let x = 0; x < width; x++) { pushOutside(x); pushOutside(count - width + x); }
-  for (let y = 0; y < height; y++) { pushOutside(y * width); pushOutside(y * width + width - 1); }
-  while (head < tail) {
-    const i = queue[head++];
-    const x = i % width;
-    if (x > 0) pushOutside(i - 1);
-    if (x < width - 1) pushOutside(i + 1);
-    if (i >= width) pushOutside(i - width);
-    if (i < count - width) pushOutside(i + width);
-  }
-  // 穴が被写体の2%未満なら埋める(折り紙のすき間など大きな穴はそのまま残す)
-  const holeLimit = sizes[keep] * 0.02;
-  const inHole = new Uint8Array(count);
-  for (let start = 0; start < count; start++) {
-    if (outside[start] || label[start] === keep || inHole[start]) continue;
-    const members = [];
-    head = 0;
-    tail = 0;
-    queue[tail++] = start;
-    inHole[start] = 1;
-    while (head < tail) {
-      const i = queue[head++];
-      members.push(i);
-      const x = i % width;
-      for (const n of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, i - width, i + width]) {
-        if (n < 0 || n >= count || outside[n] || label[n] === keep || inHole[n]) continue;
-        inHole[n] = 1;
-        queue[tail++] = n;
+  const count=width*height;
+  const visited=new Uint8Array(count), retained=new Uint8Array(count);
+  const queue=new Int32Array(count);
+  const target=Math.max(0,Math.min(height-1,ty))*width+Math.max(0,Math.min(width-1,tx));
+  let total=0;
+  for(let start=0;start<count;start++) {
+    if(visited[start] || confidence[start]<0.32) continue;
+    let head=0,tail=1,strong=0,peak=0,containsTarget=false;
+    queue[0]=start;visited[start]=1;
+    while(head<tail) {
+      const i=queue[head++],x=i%width,y=Math.floor(i/width);
+      if(confidence[i]>=0.75) strong++;
+      peak=Math.max(peak,confidence[i]);
+      if(i===target) containsTarget=true;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
+        const nx=x+dx,ny=y+dy;
+        if(nx<0 || nx>=width || ny<0 || ny>=height || (!dx && !dy)) continue;
+        const n=ny*width+nx;
+        if(!visited[n] && confidence[n]>=0.32) {visited[n]=1;queue[tail++]=n;}
       }
     }
-    if (members.length < holeLimit) for (const i of members) label[i] = keep;
+    // Preserve separate confident parts inside the user's selection; reject tiny speckles.
+    const enough=tail>=Math.max(3,Math.ceil(count*0.00015));
+    if(!enough || !(containsTarget ? peak>=0.55 : strong>=Math.max(2,tail*0.08))) continue;
+    for(let j=0;j<tail;j++) retained[queue[j]]=1;
+    total+=tail;
   }
-
-  // 残すかたまりから2px以内だけを有効にし、その範囲で確信度をなめらかなアルファにする
-  const near = new Uint8Array(count);
-  for (let i = 0; i < count; i++) {
-    if (label[i] !== keep) continue;
-    const x = i % width;
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const nx = x + dx;
-        const n = i + dy * width + dx;
-        if (nx >= 0 && nx < width && n >= 0 && n < count) near[n] = 1;
-      }
+  if(total<Math.max(3,count*0.001)) return null;
+  const near=new Uint8Array(count);
+  for(let i=0;i<count;i++) {
+    if(!retained[i]) continue;
+    const x=i%width,y=Math.floor(i/width);
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
+      const nx=x+dx,ny=y+dy;
+      if(nx>=0 && nx<width && ny>=0 && ny<height) near[ny*width+nx]=1;
     }
   }
-  const alpha = new Uint8ClampedArray(count);
-  for (let i = 0; i < count; i++) {
-    if (label[i] === keep) { alpha[i] = 255; continue; } // 被写体本体と、埋めた穴
-    if (!near[i]) continue;
-    const t = Math.min(1, Math.max(0, (confidence[i] - 0.2) / 0.3));
-    alpha[i] = Math.round(255 * t * t * (3 - 2 * t));
+  const alpha=new Uint8ClampedArray(count);
+  for(let i=0;i<count;i++) {
+    if(!near[i]) continue;
+    const t=Math.max(0,Math.min(1,(confidence[i]-0.2)/0.5));
+    alpha[i]=Math.round(255*t*t*(3-2*t));
   }
+  // Keep real holes transparent instead of automatically filling gaps between limbs.
   return alpha;
 }
 
-/// 撮影した写真の背景を切り抜く(単色〜比較的シンプルな背景を想定した簡易版。AIが使えない時の予備)。
-/// 画像の外周(四辺)から連結している「背景色に近い領域」だけを透明化するバケツ塗りつぶし方式。
-/// カード内部に背景と似た色があっても、外周とつながっていなければ消えないため、
-/// 本格的なAIセグメンテーションではないが、無地に近い背景であれば実用的な精度が出る。
 function removeBackground(ctx, width, height, tolerance = 42) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
@@ -1320,66 +1391,92 @@ function resizeCanvasToDataUrl(sourceCanvas, maxDimension) {
   return resizedCanvas.toDataURL("image/png");
 }
 
-capturePhotoBtn.addEventListener("click", async () => {
-  if (!photoVideoEl.videoWidth) {
-    setStatus("カメラの準備中です。少し待ってから撮影してください", "error");
-    return;
-  }
-  if (capturePhotoBtn.disabled) return;
-
-  const ctx = captureVisibleFrame(photoCaptureCanvasEl);
-  const width = photoCaptureCanvasEl.width;
-  const height = photoCaptureCanvasEl.height;
-
-  capturePhotoBtn.disabled = true;
-  photoVideoEl.pause(); // 撮影した瞬間の映像で止めて、処理中であることを分かりやすくする
-  setStatus("AIでキャラクターを切り抜いています…");
-  let usedAi = false;
+document.getElementById("scan-image-input").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file || cutoutBusy) return;
+  const cardId = scannedCardData && scannedCardData.cardId;
+  const url = URL.createObjectURL(file);
   try {
-    usedAi = await removeBackgroundWithAi(ctx, width, height, photoTarget);
-  } catch (e) {
-    logDebug("エラー(AIでの切り抜き。従来の方式で切り抜きます): " + e);
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    if (!scannedCardData || scannedCardData.cardId !== cardId || photoCaptureSectionEl.style.display === "none") return;
+    const scale = Math.min(1, 1600 / Math.max(image.width, image.height));
+    photoCaptureCanvasEl.width = Math.max(1, Math.round(image.width * scale));
+    photoCaptureCanvasEl.height = Math.max(1, Math.round(image.height * scale));
+    photoCaptureCanvasEl.getContext("2d").drawImage(image, 0, 0, photoCaptureCanvasEl.width, photoCaptureCanvasEl.height);
+    stopPhotoCamera();
+    photoVideoEl.style.display = "none";
+    capturePhotoBtn.style.display = "none";
+    retakePhotoBtn.style.display = "inline-block";
+    showPhotoSelection();
+  } catch (error) {
+    setStatus("画像を読み込めませんでした。PNG・JPEG・WebPの画像を選んでください", "error");
+  } finally {
+    URL.revokeObjectURL(url);
   }
-  if (!usedAi) {
-    captureVisibleFrame(photoCaptureCanvasEl); // 一時停止中の同じ映像で撮り直してから従来の方式で切り抜く
-    removeBackground(ctx, width, height);
-  }
-  capturePhotoBtn.disabled = false;
-  photoVideoEl.play().catch(() => {});
-
-  const trimmedCanvas = trimTransparentMargins(photoCaptureCanvasEl);
-
-  cutoutPreviewCanvasEl.width = trimmedCanvas.width;
-  cutoutPreviewCanvasEl.height = trimmedCanvas.height;
-  cutoutPreviewCanvasEl.getContext("2d").drawImage(trimmedCanvas, 0, 0);
-
-  capturedCutoutDataUrl = resizeCanvasToDataUrl(trimmedCanvas, 500);
-
-  photoVideoEl.style.display = "none";
-  cutoutPreviewCanvasEl.style.display = "block";
-  photoTargetEl.style.display = "none";
-  capturePhotoBtn.style.display = "none";
-  retakePhotoBtn.style.display = "inline-block";
-  usePhotoBtn.style.display = "inline-block";
-
-  setStatus(
-    usedAi
-      ? "背景を切り抜きました。よければ「この写真を使う」を押してください"
-      : "簡易モードで切り抜きました。うまくいかない時は無地の背景で撮り直してください"
-  );
 });
 
+capturePhotoBtn.addEventListener("click", () => {
+  if (!photoVideoEl.videoWidth) {setStatus("カメラの準備中です", "error");return;}
+  captureVisibleFrame(photoCaptureCanvasEl);
+  photoVideoEl.pause();
+  photoVideoEl.style.display="none";
+  capturePhotoBtn.style.display="none";
+  retakePhotoBtn.style.display="inline-block";
+  showPhotoSelection();
+});
+autoCutoutBtn.addEventListener("click", async () => {
+  if(autoCutoutBtn.disabled || cutoutBusy) return;
+  cutoutBusy=true;
+  autoCutoutBtn.disabled=true;
+  retakePhotoBtn.disabled=true;
+  skipPhotoBtn.disabled=true;
+  setStatus("囲んだ範囲からキャラクターの輪郭を切り抜いています…");
+  try {
+    const {canvas,ctx,mask,target}=createSelectedPhoto();
+    const original=ctx.getImageData(0,0,canvas.width,canvas.height);
+    let usedAi=false;
+    try {usedAi=await removeBackgroundWithAi(ctx,canvas.width,canvas.height,target,mask);}
+    catch(e) {logDebug("切り抜き: "+e);}
+    if(!usedAi) {ctx.putImageData(original,0,0);removeBackground(ctx,canvas.width,canvas.height);}
+    ctx.globalCompositeOperation="destination-in";
+    ctx.drawImage(mask,0,0);
+    ctx.globalCompositeOperation="source-over";
+    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    if(!pixels.some((v,i)=>i%4===3 && v>128)) throw new Error("被写体が見つかりませんでした。囲みを広げて試してください");
+    const trimmed=trimTransparentMargins(canvas);
+    cutoutPreviewCanvasEl.width=trimmed.width;cutoutPreviewCanvasEl.height=trimmed.height;
+    cutoutPreviewCanvasEl.getContext("2d").drawImage(trimmed,0,0);
+    capturedCutoutDataUrl=resizeCanvasToDataUrl(trimmed,500);
+    resetPhotoBounds();
+    redrawSelectionBtn.style.display="inline-block";
+    usePhotoBtn.style.display="inline-block";
+    setStatus(usedAi?"輪郭を切り抜きました。「この写真を使う」で進めます":"簡易モードで切り抜きました。結果を確認してください");
+  } catch(e) {
+    autoCutoutBtn.disabled=false;
+    setStatus(e.message || "切り抜きに失敗しました。もう一度試してください", "error");
+  } finally {
+    cutoutBusy=false;retakePhotoBtn.disabled=false;skipPhotoBtn.disabled=false;
+  }
+});
+
+
 retakePhotoBtn.addEventListener("click", () => {
+  resetPhotoBounds();
+  if (!photoStream) startPhotoCamera();
+  photoVideoEl.play().catch(() => {});
   capturedCutoutDataUrl = null;
 
   photoVideoEl.style.display = "block";
   cutoutPreviewCanvasEl.style.display = "none";
-  photoTargetEl.style.display = "block";
+  photoTargetEl.style.display = "none";
   capturePhotoBtn.style.display = "inline-block";
   retakePhotoBtn.style.display = "none";
   usePhotoBtn.style.display = "none";
 
-  setStatus("キャラクターをタップして選んでから撮影してください");
+  setStatus("\u307e\u305a\u30ad\u30e3\u30e9\u30af\u30bf\u30fc\u3092\u64ae\u5f71\u3057\u3066\u304f\u3060\u3055\u3044");
 });
 
 usePhotoBtn.addEventListener("click", () => {
@@ -1397,41 +1494,33 @@ skipPhotoBtn.addEventListener("click", () => {
 /// PC(Unity)側は一切QRコードを読み取らず、この2枠が両方埋まるのをポーリングで
 /// 待つだけの設計にしている。2台のスマホがほぼ同時に登録した場合の競合を避けるため、
 /// 単純なset()ではなくtransaction()で「今空いているか」をアトミックに確認してから書き込む。
-function joinBattleQueue(recordData, onJoined = onJoinedBattleQueue, onFull = null) {
-  const slot1Ref = db.ref(`${TABLE_PATH}/battleSlots/player1`);
-  const slot2Ref = db.ref(`${TABLE_PATH}/battleSlots/player2`);
-
-  slot1Ref.transaction(
-    (current) => (current === null ? recordData : undefined), // undefinedを返すと競合とみなされ書き込まれない
-    (error, committed) => {
-      if (error) {
-        logDebug("エラー(battleSlots/player1のtransaction): " + error);
-        return;
+async function joinBattleQueue(recordData, onJoined = onJoinedBattleQueue, onFull = null) {
+  try {
+    if (!recordData.uid) throw new Error("認証できていません。ページを再読み込みしてからお試しください");
+    // Read before transacting: a fresh client's local null is not proof that a slot is empty.
+    // Trying to overwrite an occupied slot is denied by the ownership rules.
+    const snapshot = await db.ref(`${TABLE_PATH}/battleSlots`).once("value");
+    const slots = snapshot.val() || {};
+    for (const slot of ["player1", "player2"]) {
+      if (slots[slot]) continue;
+      try {
+        const result = await db.ref(`${TABLE_PATH}/battleSlots/${slot}`).transaction(
+          current => current === null ? recordData : undefined, undefined, false
+        );
+        if (result.committed) { onJoined(slot); return; }
+      } catch (error) {
+        // A concurrent entrant may have taken this slot. Try the other slot only in that case.
+        const latest = await db.ref(`${TABLE_PATH}/battleSlots/${slot}`).once("value");
+        if (!latest.exists()) throw error;
       }
-      if (committed) {
-        onJoined("player1");
-        return;
-      }
-
-      // player1が既に埋まっていた場合はplayer2を試す
-      slot2Ref.transaction(
-        (current) => (current === null ? recordData : undefined),
-        (error2, committed2) => {
-          if (error2) {
-            logDebug("エラー(battleSlots/player2のtransaction): " + error2);
-            return;
-          }
-          if (committed2) {
-            onJoined("player2");
-          } else if (onFull) {
-            onFull();
-          } else {
-            setBattleStatus("現在、対戦の順番待ちが満席です。少し待ってからもう一度お試しください", "error");
-          }
-        }
-      );
     }
-  );
+    if (onFull) onFull();
+    else setBattleStatus("現在、対戦の順番待ちが満席です。ホームに戻ってからもう一度お試しください", "error");
+  } catch (error) {
+    logDebug("対戦エントリー失敗: " + error);
+    setBattleStatus("対戦に参加できませんでした: " + (error.message || error.code || error) + "。ホームに戻って再度お試しください", "error");
+    if (onFull) onFull();
+  }
 }
 
 /// 対戦キューへの参加に成功した後、相手が揃うまでの状況をリアルタイムに表示する。
@@ -1698,7 +1787,7 @@ function submitBattleTurnChoice(level) {
     });
 }
 
-registerBtn.addEventListener("click", () => {
+registerBtn.addEventListener("click", async () => {
   const name = characterNameInput.value.trim();
   if (!name) {
     setStatus("名前を入力してください", "error");
@@ -1741,11 +1830,17 @@ registerBtn.addEventListener("click", () => {
   // Unity(バトルシーン)がQRコードをスキャンした際にcardIdだけでこのキャラクターを
   // 引けるよう、cardIdをキーにした最新スナップショットも別途保存しておく。
   // (登録済みのカードは confirmOverwriteIfRegistered で弾くので、ここで上書きされることはない)
-  db.ref("characterByCard/" + scannedCardData.cardId)
-    .set(recordData)
-    .catch((e) => {
-      logDebug("エラー(characterByCard保存、表示は続行します): " + e);
-    });
+  try {
+    await db.ref("characterByCard/" + recordData.cardId).set(recordData);
+  } catch (e) {
+    logDebug("エラー(characterByCard保存): " + e);
+    setStatus("保存できませんでした。通信を確認して、もう一度登録してください", "error");
+    isSending = false;
+    registerBtn.disabled = false;
+    return;
+  }
+  // 保存中にホームへ戻った場合、古いカードの結果を表示しない。
+  if (!scannedCardData || scannedCardData.cardId !== recordData.cardId) return;
 
   // キャラクター作成はここで完了。対戦キューへの参加は「Battleを始める」モードで
   // 改めてこのカードのQRを読み取った時に行う(characterByCardの内容をそのまま使う)。
@@ -1753,16 +1848,22 @@ registerBtn.addEventListener("click", () => {
   if (DEV_MODE) rememberDevCard(scannedCardData.cardId);
 
   showStatusDisplay(stats);
+  CardPrint.setCard(recordData);
   isSending = false;
   registerBtn.disabled = false;
 });
 
 rescanBtn.addEventListener("click", () => {
-  resetToScanning();
+  capturedCutoutDataUrl = null;
+  showPhotoCapture(scannedCardData);
 });
 
 nextScanBtn.addEventListener("click", () => {
-  resetToScanning();
+  startCreateMode();
+});
+
+document.getElementById("print-card-btn").addEventListener("click", () => {
+  CardPrint.open(document.querySelector(".reveal-card-front"));
 });
 
 createCharacterBtn.addEventListener("click", () => {

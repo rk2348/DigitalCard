@@ -42,6 +42,10 @@ public class CharacterStats
     [NonSerialized]
     public Sprite photoSprite;
 
+    /// <summary>登録カードのID(Firebaseから呼び出したキャラクターのみ。戦績の記録に使う)。デモ用のキャラクターはnull。</summary>
+    [NonSerialized]
+    public string cardId;
+
     /// <summary>
     /// QRコードのデータ形式バージョン。
     /// 将来ステータス構造(属性やスキルの種類など)を変更した際に、
@@ -207,7 +211,9 @@ public class CharacterStats
             skill = skill != null ? new CharacterSkill(skill.skillType, skill.ratio) : null,
             isMutation = isMutation,
             specialLevel = specialLevel,
-            dataVersion = dataVersion
+            dataVersion = dataVersion,
+            photoSprite = photoSprite,
+            cardId = cardId
         };
         return clone;
     }

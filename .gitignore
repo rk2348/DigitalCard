@@ -104,3 +104,6 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# QRコード作成シーンの書き出し先(PNG・印刷シート・cards.csv)
+/QRCards/

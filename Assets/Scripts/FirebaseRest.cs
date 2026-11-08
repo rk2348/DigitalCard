@@ -49,6 +49,14 @@ public static class FirebaseRest
     private static string idToken;
     private static DateTime idTokenExpiresAt;
     private static bool authUnavailable;
+    private static float authRetryAt;               // 認証に失敗した後、次に再試行してよい時刻(Time.realtimeSinceStartup)
+    private const float AuthRetryIntervalSeconds = 30f;
+
+    /// <summary>直近の認証エラーの説明(画面表示用)。認証できていれば null。</summary>
+    public static string LastAuthError { get; private set; }
+
+    /// <summary>認証済みのトークンを持っているか。持っていない場合、Database Rules により卓のデータは読み書きできない。</summary>
+    public static bool IsAuthenticated => !string.IsNullOrEmpty(idToken);
 
     public static string DatabaseUrl => LoadSettings().databaseUrl;
     public static string TableId => LoadSettings().tableId;
@@ -95,6 +103,8 @@ public static class FirebaseRest
     {
         if (authUnavailable) yield break;
         if (!string.IsNullOrEmpty(idToken) && DateTime.UtcNow < idTokenExpiresAt) yield break;
+        // 失敗直後は毎回のリクエストで認証を叩かない(一定時間おいて再試行する。以前は一度の失敗で二度と認証しなかった)
+        if (string.IsNullOrEmpty(idToken) && Time.realtimeSinceStartup < authRetryAt) yield break;
 
         string apiKey = LoadSettings().apiKey;
         if (string.IsNullOrEmpty(apiKey))
@@ -118,7 +128,7 @@ public static class FirebaseRest
                     StoreToken(res.id_token, res.refresh_token, res.expires_in, res.user_id);
                     yield break;
                 }
-                Debug.LogWarning("FirebaseRest: トークンの更新に失敗したため、匿名サインインをやり直します: " + req.error);
+                Debug.LogWarning("FirebaseRest: トークンの更新に失敗したため、匿名サインインをやり直します: " + req.error + " " + req.downloadHandler.text);
             }
         }
 
@@ -128,20 +138,39 @@ public static class FirebaseRest
             yield return req.SendWebRequest();
             if (req.result != UnityWebRequest.Result.Success)
             {
-                authUnavailable = true;
-                Debug.LogWarning("FirebaseRest: 匿名認証を利用できないため、認証なしで接続します" +
-                                 "(Firebaseコンソールで匿名認証を有効にしてください): " + req.error);
+                string body = req.downloadHandler != null ? req.downloadHandler.text : "";
+                LastAuthError = DescribeAuthError(body, req.error);
+                authRetryAt = Time.realtimeSinceStartup + AuthRetryIntervalSeconds;
+                Debug.LogError("FirebaseRest: 匿名認証に失敗しました。認証なしでは卓のデータを読み書きできないため、オンライン対戦は始まりません。\n" +
+                               LastAuthError + "\n応答: " + req.error + " " + body);
                 yield break;
             }
 
             SignUpResponse res = JsonUtility.FromJson<SignUpResponse>(req.downloadHandler.text);
             StoreToken(res.idToken, res.refreshToken, res.expiresIn, res.localId);
-            Debug.Log($"FirebaseRest: 会場PCのUIDは {Uid} です。Database の /admins/{Uid} に true を登録してください。");
+            Debug.LogWarning($"FirebaseRest: 会場PCのUIDは {Uid} です。Database の /admins/{Uid} に true を登録してください。");
         }
+    }
+
+    /// <summary>Firebase Auth のエラー応答から、運営者が何をすればよいかの説明を作る。</summary>
+    private static string DescribeAuthError(string body, string error)
+    {
+        string b = body ?? "";
+        if (b.Contains("OPERATION_NOT_ALLOWED") || b.Contains("ADMIN_ONLY_OPERATION"))
+            return "Firebaseコンソール > Authentication > ログイン方法 で「匿名」を有効にしてください。";
+        if (b.Contains("API_KEY_INVALID") || b.Contains("API key not valid"))
+            return "FirebaseSettings.json の apiKey が正しくありません。Firebaseコンソールのプロジェクト設定からウェブAPIキーをコピーし直してください。";
+        if (b.Contains("referer") || b.Contains("REFERRER") || b.Contains("API_KEY_SERVICE_BLOCKED") || b.Contains("blocked"))
+            return "APIキーに制限(HTTPリファラー/アプリ制限)がかかっていて会場PCから使えません。Google Cloud コンソール > 認証情報 で、" +
+                   "会場PC用に制限なし(またはIdentity Toolkit / Token Service APIのみ許可)のキーを作り FirebaseSettings.json に設定してください。";
+        if (b.Contains("TOO_MANY_ATTEMPTS"))
+            return "匿名アカウントの作成回数の上限に達しました。しばらく待ってから再起動してください。";
+        return "匿名認証に失敗しました(" + error + ")。ネットワーク・プロキシ設定と Firebase の設定を確認してください。";
     }
 
     private static void StoreToken(string token, string refreshToken, string expiresIn, string uid)
     {
+        LastAuthError = null;
         idToken = token;
         Uid = uid;
         int seconds = int.TryParse(expiresIn, out int s) ? s : 3600;

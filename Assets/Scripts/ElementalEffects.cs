@@ -38,6 +38,7 @@ public static class ElementalEffects
     /// <summary>攻撃する直前、足元の魔法陣と属性のオーラを立ち上らせる。</summary>
     public static void Charge(ElementType element, Vector3 ground, float height, float power)
     {
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Charge, Mathf.Clamp01(0.5f + power * 0.3f), 0.9f + (int)element * 0.05f);
         Color color = EffectColor(element);
         StadiumKit.Host.StartCoroutine(RuneCircle(ground, color, 6f * Mathf.Sqrt(power), 0.75f));
         FlashLight(ground + Vector3.up * height * 0.5f, color, 3f * power, 10f, 0.7f);
@@ -73,10 +74,14 @@ public static class ElementalEffects
     /// <summary>命中した瞬間のエフェクト。chest は被弾した側の胸の高さ、ground は足元。</summary>
     public static void Impact(ElementType element, Vector3 chest, Vector3 ground, float power)
     {
+        OrisamoAudio.PlayElement(element, Mathf.Clamp01(0.55f + power * 0.3f));
         Color color = EffectColor(element);
         FlashLight(chest, color, 9f * power, 18f, 0.45f);
         StadiumKit.Shockwave(ground, color, 6f + 4f * power, 0.6f);
         StadiumKit.Burst(chest, Color.Lerp(color, Color.white, 0.5f), (int)(30 * power), 10f * power, 0.35f);
+        // A sharp white core and delayed rings make each impact read clearly in motion.
+        StadiumKit.Burst(chest, Color.white, Mathf.Clamp((int)(12 * power), 8, 36), 5f * power, 0.16f);
+        StadiumKit.Host.StartCoroutine(ImpactEcho(ground, color, power));
 
         switch (element)
         {
@@ -97,12 +102,21 @@ public static class ElementalEffects
         StadiumKit.Host.StartCoroutine(HitStopRoutine(seconds));
     }
 
+    private static IEnumerator ImpactEcho(Vector3 ground, Color color, float power)
+    {
+        yield return new WaitForSeconds(0.09f);
+        StadiumKit.Shockwave(ground + Vector3.up * 0.05f, Color.Lerp(color, Color.white, 0.35f), 8f + 4f * power, 0.4f);
+        if (power < 1.3f) yield break;
+        yield return new WaitForSeconds(0.1f);
+        StadiumKit.Shockwave(ground, color, 10f + 4f * power, 0.55f);
+    }
+
     private static IEnumerator HitStopRoutine(float seconds)
     {
-        float previous = Time.timeScale;
+        float previous = Time.timeScale / BattleManager.PlaybackSpeed;
         Time.timeScale = 0.04f;
         yield return new WaitForSecondsRealtime(seconds);
-        Time.timeScale = previous <= 0.05f ? 1f : previous;
+        Time.timeScale = (previous <= 0.05f ? 1f : previous) * BattleManager.PlaybackSpeed;
     }
 
     // ---------- 火 ----------

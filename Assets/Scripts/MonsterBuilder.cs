@@ -103,9 +103,7 @@ public static class MonsterBuilder
         Renderer renderer = go.GetComponent<Renderer>();
         if (renderer == null) return;
 
-        // URP/Built-inどちらでも動くよう、共有マテリアルを複製してから色を設定
-        Material mat = new Material(renderer.sharedMaterial);
-        mat.color = color;
-        renderer.material = mat;
+        // プリミティブの既定マテリアルはビルドでピンク色になることがあるため、URP Lit のマテリアルを付け直す
+        renderer.sharedMaterial = StadiumKit.Lit(color);
     }
 }

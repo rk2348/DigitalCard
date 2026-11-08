@@ -7,9 +7,9 @@ using UnityEngine.UI;
 /// タイトル画面の見た目。背景に3Dスタジアムを置いてカメラをゆっくり周回させ、
 /// 手前にORISAMOのロゴ・「バトルをはじめる」ボタン・参加方法の案内を重ねる。
 ///
-/// シーンに置かれているボタン(OnClickの設定済み)はそのまま使い、位置と見た目だけを整える。
-/// どのボタンかは OnClick に登録されたメソッド名で判別する:
-///   GoToBattle → 主役ボタン / GoToCharacterCreation → 開発者用(右下) / GoToCharacterRegistration → 旧機能のため非表示
+/// ボタンはすべてコードで生成する(シーンにCanvasがなければCanvasごと作る):
+///   「バトルをはじめる」(中央の主役ボタン) / 「QRコード作成」(右下) / 「登録カード一覧」「トーナメント」(右上)
+/// シーンにボタンなどのUIが残っていても重複しないよう、Canvas直下の既存の要素は非表示にする。
 /// 開発者モード(TitleManager)では、QRコードもスマホも使わないデモ対戦のボタンも表示する。
 /// </summary>
 public sealed class TitleScreenView : MonoBehaviour
@@ -20,6 +20,7 @@ public sealed class TitleScreenView : MonoBehaviour
     private void Start()
     {
         titleManager = GetComponent<TitleManager>();
+        Tournament.Current = null; // 途中でタイトルに戻ってきた場合、進行中のトーナメントは打ち切る
 
         Camera mainCamera = Camera.main;
         if (mainCamera != null)
@@ -31,12 +32,14 @@ public sealed class TitleScreenView : MonoBehaviour
             stadiumCamera.Orbit(new Vector3(0f, 3f, 0f), 40f, 13f, 3f, 44f, -90f, true);
         }
 
-        Canvas canvas = FindRootCanvas();
-        if (canvas == null) return;
+        Canvas canvas = OrisamoUI.EnsureSceneCanvas();
         UIAnimationDirector.ConfigureScaler(canvas);
-        ArrangeSceneUi(canvas);
+        HideSceneUi(canvas);
+        BuildMainButtons(canvas.transform);
         BuildBranding(canvas.transform);
         BuildDeveloperPanel(canvas.transform);
+        BuildGalleryButton(canvas);
+        OrisamoAudio.PlayBgm(OrisamoAudio.Bgm.Title);
 
         if (titleManager != null)
         {
@@ -50,65 +53,35 @@ public sealed class TitleScreenView : MonoBehaviour
         if (titleManager != null) titleManager.DeveloperModeChanged -= OnDeveloperModeChanged;
     }
 
-    private static Canvas FindRootCanvas()
+    /// <summary>シーンに置かれた旧UI(仮のタイトル文字や以前のボタン)を隠す。</summary>
+    private static void HideSceneUi(Canvas canvas)
     {
-        foreach (Canvas canvas in FindObjectsByType<Canvas>(FindObjectsSortMode.None))
-        {
-            if (canvas.isRootCanvas && canvas.renderMode == RenderMode.ScreenSpaceOverlay) return canvas;
-        }
-        return null;
+        foreach (Transform child in canvas.transform) child.gameObject.SetActive(false);
     }
 
-    /// <summary>シーンに置かれたボタンと仮のタイトル文字を整理する。</summary>
-    private void ArrangeSceneUi(Canvas canvas)
+    /// <summary>「バトルをはじめる」(主役)と「QRコード作成」(右下)のボタン。</summary>
+    private void BuildMainButtons(Transform canvas)
     {
-        foreach (Transform child in canvas.transform)
-        {
-            // 仮のタイトル文字(「DigitalCardゲーム(仮)」)は新しいロゴに置き換える
-            if (child.GetComponent<TextMeshProUGUI>() != null) child.gameObject.SetActive(false);
-        }
+        if (titleManager == null) return;
 
-        foreach (Button button in canvas.GetComponentsInChildren<Button>(true))
-        {
-            string method = PersistentMethod(button);
-            RectTransform rect = (RectTransform)button.transform;
-            if (method == "GoToCharacterRegistration")
-            {
-                button.gameObject.SetActive(false); // 登録はスマホで行うため、会場PCには不要
-            }
-            else if (method == "GoToBattle")
-            {
-                OrisamoUI.PlaceCenter(rect, new Vector2(0f, -330f), new Vector2(1200f, 240f));
-                SetLabel(button, "バトルをはじめる", 96f);
-                Style(button).SetPrimary(true);
-            }
-            else if (method == "GoToCharacterCreation")
-            {
-                OrisamoUI.Place(rect, new Vector2(1f, 0f), new Vector2(-70f, 70f), new Vector2(640f, 140f));
-                SetLabel(button, "QRコード作成", 52f);
-                Style(button);
-            }
-        }
+        Button battle = CreateButton(canvas, "StartBattleButton", "バトルをはじめる", 96f, titleManager.GoToBattle);
+        OrisamoUI.PlaceCenter((RectTransform)battle.transform, new Vector2(0f, -330f), new Vector2(1200f, 240f));
+        Style(battle).SetPrimary(true);
+
+        Button qr = CreateButton(canvas, "QRCreationButton", "QRコード作成", 52f, titleManager.GoToCharacterCreation);
+        OrisamoUI.Place((RectTransform)qr.transform, new Vector2(1f, 0f), new Vector2(-70f, 70f), new Vector2(640f, 140f));
+        Style(qr);
     }
 
-    private static string PersistentMethod(Button button)
+    private static Button CreateButton(Transform parent, string name, string text, float fontSize, UnityEngine.Events.UnityAction onClick)
     {
-        for (int i = 0; i < button.onClick.GetPersistentEventCount(); i++)
-        {
-            string method = button.onClick.GetPersistentMethodName(i);
-            if (!string.IsNullOrEmpty(method)) return method;
-        }
-        return null;
-    }
-
-    private static void SetLabel(Button button, string text, float size)
-    {
-        TextMeshProUGUI label = button.GetComponentInChildren<TextMeshProUGUI>(true);
-        if (label == null) return;
-        label.text = text;
-        label.fontSize = size;
-        label.enableAutoSizing = false;
-        label.alignment = TextAlignmentOptions.Center;
+        GameObject go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+        go.transform.SetParent(parent, false);
+        TextMeshProUGUI label = OrisamoUI.CreateText("Label", go.transform, text, fontSize, OrisamoUI.Parchment, TextAlignmentOptions.Center, FontStyles.Bold);
+        OrisamoUI.Stretch(label.rectTransform);
+        Button button = go.GetComponent<Button>();
+        button.onClick.AddListener(onClick);
+        return button;
     }
 
     private static UIProductButtonStyle Style(Button button)
@@ -189,6 +162,33 @@ public sealed class TitleScreenView : MonoBehaviour
 
         CreateDeveloperButton("デモ対戦（CPU同士）", new Vector2(0f, -210f), () => titleManager.StartDemoBattle(BattleManager.DemoMode.CpuVsCpu));
         CreateDeveloperButton("デモ対戦（キーボード操作）", new Vector2(0f, -360f), () => titleManager.StartDemoBattle(BattleManager.DemoMode.PlayerVsCpu));
+    }
+
+    /// <summary>右上の「登録カード一覧」ボタン。押すと登録済みのカードを一覧表示する(CardGalleryView)。</summary>
+    private void BuildGalleryButton(Canvas canvas)
+    {
+        CardGalleryView gallery = CardGalleryView.Create(canvas);
+        gallery.StartCpuMatch = (first, second) =>
+        {
+            BattleManager.PendingCardMatch = new[] { first, second };
+            titleManager.GoToBattle();
+        };
+        gallery.StartTournament = (picked, pool, size) =>
+        {
+            Tournament tournament = Tournament.Create(picked, pool, size, new System.Random());
+            if (tournament == null) return;
+            Tournament.Current = tournament;
+            titleManager.GoToBattle();
+        };
+
+        Button button = CreateButton(canvas.transform, "GalleryButton", "登録カード一覧", 52f, gallery.Open);
+        OrisamoUI.Place((RectTransform)button.transform, new Vector2(1f, 1f), new Vector2(-70f, -70f), new Vector2(640f, 140f));
+        Style(button);
+
+        Button tournamentButton = CreateButton(canvas.transform, "TournamentButton", "トーナメント", 52f, gallery.OpenForTournament);
+        OrisamoUI.Place((RectTransform)tournamentButton.transform, new Vector2(1f, 1f), new Vector2(-70f, -240f), new Vector2(640f, 140f));
+        Style(tournamentButton);
+        gallery.transform.SetAsLastSibling();
     }
 
     private void CreateDeveloperButton(string text, Vector2 position, UnityEngine.Events.UnityAction onClick)

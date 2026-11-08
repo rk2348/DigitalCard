@@ -23,6 +23,7 @@ public static class FirebaseCharacterMapper
             hp = record.hp,
             maxHp = record.maxHp,
             isMutation = record.isMutation,
+            cardId = record.cardId,
         };
 
         if (Enum.TryParse(record.element, out ElementType element)) stats.element = element;

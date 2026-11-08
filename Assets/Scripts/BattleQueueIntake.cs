@@ -18,7 +18,11 @@ using UnityEngine.Networking;
 ///
 /// 4. 立ち去った人の枠が埋まったままにならないよう、次の枠は自動で空ける:
 ///    ・スマホの生存信号(/queuePresence/{slot}、数秒ごと)が presenceTimeoutSeconds 途絶えた枠
+///    ・見始めてから presenceTimeoutSeconds 経っても生存信号が一度も更新されない枠
+///      (前回の起動時などから残っていた枠。残っていた生存信号の値は「生きている」証拠にしない)
 ///    ・maxWaitSeconds 以上、対戦相手が来ないまま待っている枠
+///    試合を始めるのは、両方の枠で生存信号の更新を確認できた時だけ。これにより、誰もQRコードを
+///    読み取っていないのに、残っていた枠どうしで試合が始まる(キャラクターが表示される)ことを防ぐ。
 ///    (スマホ側も、通信が切れた時点で自分の枠を自動で消す。運営者は ResetQueue で全枠を空けられる)
 ///
 /// 【重要】PC(Unity)側でQRコードを直接読み取ることは想定していない。
@@ -67,6 +71,10 @@ public class BattleQueueIntake : MonoBehaviour
     /// <summary>参加枠の状況が取得できるたびに発火(プレイヤー1参加済みか, その名前, プレイヤー2参加済みか, その名前)。</summary>
     public event Action<bool, string, bool, string> OnSlotsChanged;
 
+    /// <summary>Firebaseに接続できない時はその理由、接続が回復した時は null で発火(受付画面に表示する用)。</summary>
+    public event Action<string> OnConnectionProblem;
+    private bool reportingProblem;
+
     private bool matchStarted;
 
     // 参加者名の表示用キャッシュ(枠が埋まった時に名前だけを1回取得する)
@@ -85,7 +93,7 @@ public class BattleQueueIntake : MonoBehaviour
         public float since;          // この人を最初に見た時刻(Time.time)
         public long lastPresenceAt;  // 最後に受け取った生存信号の値
         public float lastPresenceChange;
-        public bool presenceSeen;    // 一度でも生存信号を受け取ったか(古い版のスマホは送らないので、その場合は待ち時間の上限だけで判断する)
+        public bool presenceSeen;    // 見始めてから生存信号の更新を受け取ったか(=今まさにスマホが待っている枠か)
 
         public void Clear()
         {
@@ -144,13 +152,28 @@ public class BattleQueueIntake : MonoBehaviour
         {
             if (req.result != UnityWebRequest.Result.Success)
             {
-                Debug.LogWarning("BattleQueueIntake: battleSlotsの取得に失敗しました: " + req.error);
+                Debug.LogWarning("BattleQueueIntake: battleSlotsの取得に失敗しました: " + req.error + " " + req.downloadHandler.text);
+                // 画面にも理由を出す(多いのは、会場PCが未認証 or /admins に未登録で Database Rules に弾かれているケース)
+                bool denied = req.responseCode == 401 || req.responseCode == 403;
+                string reason = !FirebaseRest.IsAuthenticated
+                    ? "Firebaseに接続できません: " + (FirebaseRest.LastAuthError ?? "匿名認証ができていません")
+                    : denied
+                        ? $"Firebaseの権限がありません。Realtime Database の /admins/{FirebaseRest.Uid} に true を登録してください"
+                        : "Firebaseとの通信に失敗しました(" + req.error + ")";
+                SetStatus($"卓 {FirebaseRest.TableId}　{reason}");
+                reportingProblem = true;
+                OnConnectionProblem?.Invoke(reason);
                 return;
             }
             presence = ParseOrDefault<BattleSlotsPresence>(req.downloadHandler.text) ?? new BattleSlotsPresence();
         }, "shallow=true");
 
         if (presence == null) yield break;
+        if (reportingProblem)
+        {
+            reportingProblem = false;
+            OnConnectionProblem?.Invoke(null);
+        }
 
         if (!presence.player1) player1Name = null;
         else if (player1Name == null) yield return StartCoroutine(FetchName("player1", n => player1Name = n));
@@ -162,14 +185,17 @@ public class BattleQueueIntake : MonoBehaviour
         bool expired = false;
         yield return StartCoroutine(ExpireAbandonedSlots(presence, e => expired = e));
         if (expired) yield break;
+        bool live1 = presence.player1 && watch1.presenceSeen;
+        bool live2 = presence.player2 && watch2.presenceSeen;
 
         SetStatus(
             $"卓 {FirebaseRest.TableId}　" +
-            $"プレイヤー1: {(presence.player1 ? (player1Name ?? "") + " 参加済み" : "待機中")} / " +
-            $"プレイヤー2: {(presence.player2 ? (player2Name ?? "") + " 参加済み" : "待機中")}");
-        OnSlotsChanged?.Invoke(presence.player1, player1Name, presence.player2, player2Name);
+            $"プレイヤー1: {(live1 ? (player1Name ?? "") + " 参加済み" : presence.player1 ? "確認中" : "待機中")} / " +
+            $"プレイヤー2: {(live2 ? (player2Name ?? "") + " 参加済み" : presence.player2 ? "確認中" : "待機中")}");
+        // 生存信号を確認できるまでは、残っていた枠かもしれないので画面には出さない
+        OnSlotsChanged?.Invoke(live1, live1 ? player1Name : null, live2, live2 ? player2Name : null);
 
-        if (presence.player1 && presence.player2)
+        if (live1 && live2)
         {
             yield return StartCoroutine(StartMatch());
         }
@@ -201,6 +227,7 @@ public class BattleQueueIntake : MonoBehaviour
             if (w.occupant == null) continue;
             string reason = null;
             if (w.presenceSeen && Time.time - w.lastPresenceChange > presenceTimeoutSeconds) reason = "スマホの通信が途絶えたため";
+            else if (!w.presenceSeen && Time.time - w.since > presenceTimeoutSeconds) reason = "スマホからの生存信号が届かないため(前回から残っていた枠)";
             else if (Time.time - w.since > maxWaitSeconds) reason = "待ち時間の上限を超えたため";
             if (reason == null) continue;
 
@@ -234,7 +261,11 @@ public class BattleQueueIntake : MonoBehaviour
         string uid = null;
         yield return FirebaseRest.Get($"{SlotsPath}/{w.slot}/uid", req =>
         {
-            if (req.result == UnityWebRequest.Result.Success) uid = req.downloadHandler.text.Trim('"');
+            if (req.result == UnityWebRequest.Result.Success)
+            {
+                uid = req.downloadHandler.text.Trim('"');
+                if (uid == "null") uid = ""; // uidが書かれていない枠(スマホが未ログイン)
+            }
         });
         if (uid == null) yield break;
 
@@ -248,9 +279,14 @@ public class BattleQueueIntake : MonoBehaviour
 
     private static void ObservePresence(SlotWatch w, QueuePresenceEntry entry)
     {
-        if (w.occupant == null || entry == null || entry.at == 0 || entry.uid != w.uid) return;
+        if (w.occupant == null || entry == null || entry.at == 0) return;
+        // スマホが匿名ログインできていない場合はuidが空になるので、その時はuidの一致を条件にしない
+        if (!string.IsNullOrEmpty(w.uid) && !string.IsNullOrEmpty(entry.uid) && entry.uid != w.uid) return;
         if (entry.at == w.lastPresenceAt) return;
+        bool firstValue = w.lastPresenceAt == 0;
         w.lastPresenceAt = entry.at;
+        // 最初に読んだ値は前から残っていたものかもしれないので、値が変わる(=今も送られている)まで待つ
+        if (firstValue) return;
         w.lastPresenceChange = Time.time;
         w.presenceSeen = true;
     }

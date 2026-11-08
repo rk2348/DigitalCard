@@ -21,6 +21,9 @@ public class FirebaseCharacterRecord
 
     public string characterName;
 
+    /// 登録日時(スマホ側の Date.now()、ミリ秒)。登録カード一覧の並び順に使う。
+    public long timestamp;
+
     /// ElementType の名前("Fire" / "Wind" / "Dark" / "Water" / "Earth" / "Light")
     public string element;
 

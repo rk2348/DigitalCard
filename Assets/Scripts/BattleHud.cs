@@ -40,6 +40,37 @@ public sealed class BattleHud : MonoBehaviour
 
     // 結果
     private TextMeshProUGUI resultCountdown;
+    private TextMeshProUGUI playbackLabel;
+    private TextMeshProUGUI tieBoostLabel;
+
+    public void SetTieBoost(int consecutiveTies)
+    {
+        if (tieBoostLabel == null) return;
+        tieBoostLabel.gameObject.SetActive(consecutiveTies > 0);
+        tieBoostLabel.text = $"あいこ連続　次の攻撃 ×{BattleRules.TieDamageMultiplier(consecutiveTies):0.0}";
+    }
+
+    public void ConfigurePlaybackSpeed(UnityEngine.Events.UnityAction toggle)
+    {
+        Image image = OrisamoUI.CreateImage("PlaybackSpeed", root, OrisamoUI.RoundedPanel, new Color(0.12f, 0.09f, 0.22f, 0.96f));
+        RectTransform rect = image.rectTransform;
+        rect.anchorMin = rect.anchorMax = new Vector2(1f, 1f);
+        rect.pivot = new Vector2(1f, 1f);
+        rect.anchoredPosition = new Vector2(-48f, -32f);
+        rect.sizeDelta = new Vector2(320f, 88f);
+        image.raycastTarget = true;
+        Button button = image.gameObject.AddComponent<Button>();
+        button.targetGraphic = image;
+        button.onClick.AddListener(toggle);
+        playbackLabel = OrisamoUI.CreateText("Label", rect, "速度 ×1  [F8]", 38f, OrisamoUI.Gold, TextAlignmentOptions.Center);
+        OrisamoUI.Stretch(playbackLabel.rectTransform);
+        playbackLabel.raycastTarget = false;
+    }
+
+    public void SetPlaybackSpeed(float speed)
+    {
+        if (playbackLabel != null) playbackLabel.text = speed > 1.5f ? "速度 ×2  [F8]" : "速度 ×1  [F8]";
+    }
 
     public static BattleHud Create(Canvas canvas)
     {
@@ -98,6 +129,7 @@ public sealed class BattleHud : MonoBehaviour
 
     private TextMeshProUGUI tableLabel;
     private TextMeshProUGUI devHint;
+    private TextMeshProUGUI waitingNotice;
 
     private void BuildWaiting()
     {
@@ -134,7 +166,11 @@ public sealed class BattleHud : MonoBehaviour
         OrisamoUI.Place(rule.rectTransform, new Vector2(0.5f, 0f), new Vector2(0f, 45f), new Vector2(2900f, 70f));
 
         devHint = OrisamoUI.CreateText("DevHint", waitingLayer, "", 40f, OrisamoUI.WithAlpha(OrisamoUI.Muted, 0.75f), TextAlignmentOptions.Left);
-        OrisamoUI.Place(devHint.rectTransform, Vector2.zero, new Vector2(60f, 340f), new Vector2(1600f, 60f));
+        OrisamoUI.Place(devHint.rectTransform, Vector2.zero, new Vector2(60f, 340f), new Vector2(2400f, 60f));
+
+        waitingNotice = OrisamoUI.CreateText("Notice", waitingLayer, "", 56f, OrisamoUI.GoldLight);
+        OrisamoUI.Place(waitingNotice.rectTransform, new Vector2(0.5f, 0f), new Vector2(0f, 420f), new Vector2(3000f, 80f));
+        OrisamoUI.ApplyOutline(waitingNotice, OrisamoUI.Ink, 0.25f, new Color(0f, 0f, 0f, 0.7f));
     }
 
     public void ShowWaiting(string tableId, string developerHint)
@@ -153,6 +189,18 @@ public sealed class BattleHud : MonoBehaviour
         slot2.Set(player2Joined, player2Name, this);
     }
 
+    /// <summary>受付画面の案内(登録カードの読み込み状況など)。空文字で消す。</summary>
+    public void SetWaitingNotice(string text)
+    {
+        waitingNotice.text = text ?? "";
+    }
+
+    /// <summary>受付画面の枠に、会場PCで呼び出した登録カード(写真・名前)を表示する。</summary>
+    public void ShowRegisteredCard(bool player1, CharacterStats stats, string state)
+    {
+        (player1 ? slot1 : slot2).SetCard(stats, state, this);
+    }
+
     public void HideWaiting()
     {
         waitingLayer.gameObject.SetActive(false);
@@ -164,6 +212,7 @@ public sealed class BattleHud : MonoBehaviour
         private readonly TextMeshProUGUI state;
         private readonly TextMeshProUGUI name;
         private readonly Image glow;
+        private readonly Image photo;
         private bool joined;
 
         public SlotCard(Transform parent, string label, Color color, Vector2 position)
@@ -191,6 +240,23 @@ public sealed class BattleHud : MonoBehaviour
 
             state = OrisamoUI.CreateText("State", root, "", 60f, OrisamoUI.Muted);
             OrisamoUI.Place(state.rectTransform, new Vector2(0.5f, 0f), new Vector2(0f, 50f), new Vector2(1000f, 80f));
+
+            photo = OrisamoUI.CreateImage("Photo", root, null, Color.white);
+            OrisamoUI.Place(photo.rectTransform, new Vector2(0f, 0.5f), new Vector2(60f, -10f), new Vector2(260f, 260f));
+            photo.preserveAspect = true;
+            photo.gameObject.SetActive(false);
+        }
+
+        /// <summary>登録カードを表示する(写真があれば左に置き、名前を右へずらす)。</summary>
+        public void SetCard(CharacterStats stats, string stateText, MonoBehaviour host)
+        {
+            Set(true, stats.characterName, host);
+            state.text = stats.isMutation ? stateText + "　<color=#FFE08A>★ RARE</color>" : stateText;
+            bool hasPhoto = stats.photoSprite != null;
+            photo.sprite = stats.photoSprite;
+            photo.gameObject.SetActive(hasPhoto);
+            name.rectTransform.anchoredPosition = new Vector2(hasPhoto ? 150f : 0f, -20f);
+            name.rectTransform.sizeDelta = new Vector2(hasPhoto ? 720f : 1000f, 130f);
         }
 
         public void Set(bool isJoined, string playerName, MonoBehaviour host)
@@ -198,9 +264,16 @@ public sealed class BattleHud : MonoBehaviour
             bool newlyJoined = isJoined && !joined;
             joined = isJoined;
             name.text = isJoined ? (string.IsNullOrEmpty(playerName) ? "…" : playerName) : "？";
+            photo.gameObject.SetActive(false);
+            name.rectTransform.anchoredPosition = new Vector2(0f, -20f);
+            name.rectTransform.sizeDelta = new Vector2(1000f, 130f);
             name.color = isJoined ? OrisamoUI.Parchment : OrisamoUI.WithAlpha(OrisamoUI.Muted, 0.6f);
             state.text = isJoined ? "<color=#F8CF70>参加完了！</color>" : "参加を待っています…";
-            if (newlyJoined) host.StartCoroutine(Punch());
+            if (newlyJoined)
+            {
+                host.StartCoroutine(Punch());
+                OrisamoAudio.Play(OrisamoAudio.Sfx.Join);
+            }
         }
 
         public void Tick(float time)
@@ -235,6 +308,10 @@ public sealed class BattleHud : MonoBehaviour
         OrisamoUI.Place(turnLabel.rectTransform, new Vector2(0.5f, 1f), new Vector2(0f, -22f), new Vector2(400f, 60f));
         turnNumber = OrisamoUI.CreateText("Number", turn, "1", 90f, OrisamoUI.Parchment, TextAlignmentOptions.Center, FontStyles.Bold);
         OrisamoUI.Place(turnNumber.rectTransform, new Vector2(0.5f, 0f), new Vector2(0f, 12f), new Vector2(400f, 100f));
+        tieBoostLabel = OrisamoUI.CreateText("TieBoost", battleLayer, "", 42f, OrisamoUI.Gold, TextAlignmentOptions.Center, FontStyles.Bold);
+        OrisamoUI.Place(tieBoostLabel.rectTransform, new Vector2(0.5f, 1f), new Vector2(0f, -225f), new Vector2(820f, 70f));
+        tieBoostLabel.raycastTarget = false;
+        tieBoostLabel.gameObject.SetActive(false);
 
         // 選択の残り時間
         countdownRoot = OrisamoUI.CreateRect("Countdown", battleLayer);
@@ -301,6 +378,15 @@ public sealed class BattleHud : MonoBehaviour
         (player1 ? panel1 : panel2)?.SetRole(role, color, status);
     }
 
+    private int lastCountdownSecond = -1;
+
+    /// <summary>両者の相性(相手への倍率)をパネルに表示する。</summary>
+    public void SetAffinity(float player1Multiplier, float player2Multiplier)
+    {
+        panel1?.SetAffinity(player1Multiplier);
+        panel2?.SetAffinity(player2Multiplier);
+    }
+
     public void SetCountdown(float secondsLeft, float totalSeconds)
     {
         if (secondsLeft < 0f)
@@ -311,6 +397,8 @@ public sealed class BattleHud : MonoBehaviour
         countdownRoot.gameObject.SetActive(true);
         countdownFill.fillAmount = totalSeconds > 0f ? Mathf.Clamp01(secondsLeft / totalSeconds) : 0f;
         int seconds = Mathf.CeilToInt(secondsLeft);
+        if (seconds != lastCountdownSecond && seconds <= 5 && seconds > 0) OrisamoAudio.Play(OrisamoAudio.Sfx.Tick, 0.7f, seconds <= 2 ? 1.25f : 1f);
+        lastCountdownSecond = seconds;
         countdownText.text = seconds.ToString();
         Color color = seconds <= 5 ? new Color(1f, 0.4f, 0.35f) : OrisamoUI.Gold;
         countdownFill.color = color;
@@ -340,6 +428,7 @@ public sealed class BattleHud : MonoBehaviour
         private readonly Image rolePill;
         private readonly TextMeshProUGUI roleText;
         private readonly TextMeshProUGUI statusText;
+        private readonly TextMeshProUGUI affinityText;
         private const float BarWidth = 1060f;
         private float target = 1f;
         private float shown = 1f;
@@ -365,6 +454,19 @@ public sealed class BattleHud : MonoBehaviour
             TextMeshProUGUI title = OrisamoUI.CreateText("Label", Root, label, 44f, color, align, FontStyles.Bold);
             title.characterSpacing = 10f;
             OrisamoUI.Place(title.rectTransform, anchor, new Vector2(textX, -34f), new Vector2(700f, 60f));
+
+            affinityText = OrisamoUI.CreateText("Affinity", Root, "", 44f, OrisamoUI.Muted, align, FontStyles.Bold);
+            OrisamoUI.Place(affinityText.rectTransform, anchor, new Vector2(textX + 420f * s, -34f), new Vector2(600f, 60f));
+
+            if (stats.isMutation)
+            {
+                // レアカード(突然変異)の目印: パネルの反対側の上に金色の「RARE」
+                Vector2 corner = new Vector2(1f - anchor.x, 1f);
+                Image pill = OrisamoUI.CreateImage("Rare", Root, OrisamoUI.RoundedPanel, OrisamoUI.Gold, true);
+                OrisamoUI.Place(pill.rectTransform, corner, new Vector2(-40f * s, -26f), new Vector2(250f, 72f));
+                TextMeshProUGUI rare = OrisamoUI.CreateText("Text", pill.rectTransform, "★ RARE", 44f, new Color(0.25f, 0.1f, 0.02f), TextAlignmentOptions.Center, FontStyles.Bold);
+                OrisamoUI.Stretch(rare.rectTransform);
+            }
 
             TextMeshProUGUI name = OrisamoUI.CreateText("Name", Root, stats.characterName, 96f, OrisamoUI.Parchment, align, FontStyles.Bold);
             OrisamoUI.Place(name.rectTransform, anchor, new Vector2(textX, -86f), new Vector2(1100f, 120f));
@@ -426,6 +528,13 @@ public sealed class BattleHud : MonoBehaviour
             if (ratio < target) trailDelay = 0.45f;
             target = ratio;
             hpText.text = $"{Mathf.Max(hp, 0)} <size=70%>/ {maxHp}</size>";
+        }
+
+        public void SetAffinity(float multiplier)
+        {
+            affinityText.text = multiplier > ElementAffinity.NeutralMultiplier ? "<color=#FF9C6A>相性 有利 ▲</color>"
+                : multiplier < ElementAffinity.NeutralMultiplier ? "<color=#8FB8FF>相性 不利 ▼</color>"
+                : "相性 互角";
         }
 
         public void SetRole(string role, Color color, string status)
@@ -506,6 +615,7 @@ public sealed class BattleHud : MonoBehaviour
             $"<color=#{ColorUtility.ToHtmlStringRGB(ElementAffinity.GetElementColor(stats.element))}>{OrisamoUI.ElementKanji(stats.element)}属性</color>",
             60f, OrisamoUI.Muted, side < 0f ? TextAlignmentOptions.Right : TextAlignmentOptions.Left, FontStyles.Bold);
         OrisamoUI.Place(element.rectTransform, new Vector2(side < 0f ? 1f : 0f, 0f), new Vector2(0f, -70f), new Vector2(800f, 80f));
+        if (stats.isMutation) element.text += "　<color=#FFE08A>★ RARE</color>";
         return text;
     }
 
@@ -514,6 +624,7 @@ public sealed class BattleHud : MonoBehaviour
     /// </summary>
     public IEnumerator PlayReveal(AttackLevel attack, AttackLevel defense, bool attackerIsPlayer1, bool guarded)
     {
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Reveal);
         RectTransform reveal = OrisamoUI.Stretch(OrisamoUI.CreateRect("Reveal", overlayLayer));
         float attackSide = attackerIsPlayer1 ? -1f : 1f;
         RectTransform attackToken = LevelToken(reveal, attack, "攻撃", OrisamoUI.AttackColor, new Vector2(attackSide * 430f, 160f));
@@ -613,6 +724,165 @@ public sealed class BattleHud : MonoBehaviour
             yield return null;
         }
         Destroy(banner.gameObject);
+    }
+
+    // ==================== とどめの一撃(確定演出) ====================
+    // スローモーション中も同じ速さで動くよう、ここの演出はすべて unscaledDeltaTime で進める。
+
+    private RectTransform finisherRoot;
+    private Image finisherShade;
+    private readonly System.Collections.Generic.List<Image> speedLines = new System.Collections.Generic.List<Image>();
+
+    /// <summary>
+    /// この一撃で決着がつく時の予告: 画面の周りが暗くなり、集中線が走り、「FINAL ATTACK」のカットインが入る。
+    /// 集中線と暗幕は EndFinisherCue を呼ぶまで残す(突進〜吹き飛ぶまで画面を締めておくため)。
+    /// </summary>
+    public IEnumerator PlayFinisherCue(string attackerName, Color color)
+    {
+        EndFinisherCueImmediate();
+        OrisamoAudio.Play(OrisamoAudio.Sfx.FinisherCue);
+        finisherRoot = OrisamoUI.Stretch(OrisamoUI.CreateRect("Finisher", overlayLayer));
+        finisherRoot.SetAsLastSibling();
+
+        finisherShade = OrisamoUI.CreateImage("Shade", finisherRoot, OrisamoUI.Vignette, new Color(0.05f, 0f, 0.02f, 0f));
+        OrisamoUI.Stretch(finisherShade.rectTransform, -300f);
+
+        RectTransform lines = OrisamoUI.Stretch(OrisamoUI.CreateRect("SpeedLines", finisherRoot));
+        speedLines.Clear();
+        for (int i = 0; i < 72; i++)
+        {
+            Image line = OrisamoUI.CreateImage("Line", lines, null, Color.clear);
+            RectTransform r = line.rectTransform;
+            r.anchorMin = r.anchorMax = new Vector2(0.5f, 0.5f);
+            r.pivot = new Vector2(0f, 0.5f);
+            float angle = (i + Random.value * 0.6f) / 72f * 360f;
+            r.localRotation = Quaternion.Euler(0f, 0f, angle);
+            speedLines.Add(line);
+        }
+        StartCoroutine(AnimateSpeedLines(finisherRoot, color));
+
+        StartCoroutine(FlashRoutine(Color.white, 0.35f));
+        TextMeshProUGUI title = OrisamoUI.CreateText("Title", finisherRoot, "FINAL ATTACK", 260f, Color.white, TextAlignmentOptions.Center, FontStyles.Bold | FontStyles.Italic);
+        OrisamoUI.PlaceCenter(title.rectTransform, new Vector2(0f, 120f), new Vector2(3600f, 320f));
+        title.characterSpacing = 6f;
+        OrisamoUI.ApplyGoldGradient(title);
+        OrisamoUI.ApplyOutline(title, new Color(0.35f, 0.04f, 0.02f, 1f), 0.22f, new Color(0f, 0f, 0f, 0.85f), 1.6f);
+        TextMeshProUGUI sub = OrisamoUI.CreateText("Subtitle", finisherRoot, $"{attackerName} の とどめの一撃！", 96f, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
+        OrisamoUI.PlaceCenter(sub.rectTransform, new Vector2(0f, -110f), new Vector2(3600f, 130f));
+        OrisamoUI.ApplyOutline(sub, Color.Lerp(OrisamoUI.Ink, color, 0.4f), 0.25f, new Color(0f, 0f, 0f, 0.8f), 1.2f);
+
+        // 大きく叩きつけるように現れ、少し震えてから上へ抜けていく
+        const float total = 1.5f;
+        for (float t = 0f; t < total; t += Time.unscaledDeltaTime)
+        {
+            float slam = OrisamoUI.EaseOutCubic(Mathf.Clamp01(t / 0.18f));
+            float shake = t < 0.45f ? (0.45f - t) * 40f : 0f;
+            Vector2 jitter = new Vector2(Random.Range(-shake, shake), Random.Range(-shake, shake));
+            title.rectTransform.localScale = Vector3.one * Mathf.Lerp(2.6f, 1f, slam);
+            title.rectTransform.anchoredPosition = new Vector2(0f, 120f) + jitter;
+            sub.alpha = Mathf.Clamp01((t - 0.2f) / 0.2f);
+            finisherShade.color = new Color(0.05f, 0f, 0.02f, Mathf.Clamp01(t / 0.25f) * 0.85f);
+
+            float leave = Mathf.Clamp01((t - 1.15f) / 0.35f);
+            if (leave > 0f)
+            {
+                title.alpha = sub.alpha = 1f - leave;
+                title.rectTransform.anchoredPosition += Vector2.up * (leave * leave * 300f);
+            }
+            yield return null;
+        }
+        Destroy(title.gameObject);
+        Destroy(sub.gameObject);
+    }
+
+    /// <summary>集中線と暗幕を消す。</summary>
+    public void EndFinisherCue()
+    {
+        if (finisherRoot != null) StartCoroutine(FadeOutFinisher(finisherRoot));
+        finisherRoot = null;
+    }
+
+    private void EndFinisherCueImmediate()
+    {
+        if (finisherRoot != null) Destroy(finisherRoot.gameObject);
+        finisherRoot = null;
+    }
+
+    private IEnumerator FadeOutFinisher(RectTransform target)
+    {
+        CanvasGroup group = target.gameObject.AddComponent<CanvasGroup>();
+        for (float t = 0f; t < 0.5f; t += Time.unscaledDeltaTime)
+        {
+            if (target == null) yield break;
+            group.alpha = 1f - t / 0.5f;
+            yield return null;
+        }
+        if (target != null) Destroy(target.gameObject);
+    }
+
+    /// <summary>集中線を毎フレーム少しずつ変えて、ちらつかせる。</summary>
+    private IEnumerator AnimateSpeedLines(RectTransform owner, Color color)
+    {
+        Color tint = Color.Lerp(Color.white, color, 0.35f);
+        while (owner != null) // 消えるまで(EndFinisherCueのフェードアウト中も)動かし続ける
+        {
+            foreach (Image line in speedLines)
+            {
+                if (line == null) continue;
+                RectTransform r = line.rectTransform;
+                float radius = Random.Range(1050f, 1500f);
+                Vector3 dir = r.localRotation * Vector3.right;
+                r.anchoredPosition = new Vector2(dir.x, dir.y) * radius;
+                r.sizeDelta = new Vector2(Random.Range(900f, 1600f), Random.Range(4f, 16f));
+                line.color = OrisamoUI.WithAlpha(tint, Random.Range(0.25f, 0.7f));
+            }
+            yield return new WaitForSecondsRealtime(0.05f);
+        }
+    }
+
+    /// <summary>画面全体を一瞬光らせる(命中の瞬間など)。</summary>
+    public void FlashScreen(Color color, float duration = 0.4f)
+    {
+        StartCoroutine(FlashRoutine(color, duration));
+    }
+
+    private IEnumerator FlashRoutine(Color color, float duration)
+    {
+        Image flash = OrisamoUI.CreateImage("Flash", overlayLayer, null, color);
+        OrisamoUI.Stretch(flash.rectTransform, -50f);
+        flash.transform.SetAsLastSibling();
+        for (float t = 0f; t < duration; t += Time.unscaledDeltaTime)
+        {
+            float p = t / duration;
+            flash.color = OrisamoUI.WithAlpha(color, (1f - p) * (1f - p) * 0.9f);
+            yield return null;
+        }
+        Destroy(flash.gameObject);
+    }
+
+    /// <summary>決着の「K.O.」を画面に叩きつける。</summary>
+    public IEnumerator PlayKnockoutStamp()
+    {
+        TextMeshProUGUI ko = OrisamoUI.CreateText("KO", overlayLayer, "K.O.", 520f, Color.white, TextAlignmentOptions.Center, FontStyles.Bold | FontStyles.Italic);
+        OrisamoUI.PlaceCenter(ko.rectTransform, new Vector2(0f, 120f), new Vector2(3000f, 600f));
+        ko.transform.SetAsLastSibling();
+        ko.enableVertexGradient = true;
+        ko.colorGradient = new VertexGradient(new Color(1f, 0.92f, 0.6f), new Color(1f, 0.92f, 0.6f), new Color(1f, 0.32f, 0.2f), new Color(1f, 0.32f, 0.2f));
+        OrisamoUI.ApplyOutline(ko, new Color(0.25f, 0.02f, 0.02f, 1f), 0.24f, new Color(0f, 0f, 0f, 0.85f), 2f);
+        StartCoroutine(FlashRoutine(new Color(1f, 0.85f, 0.6f), 0.3f));
+        OrisamoAudio.Play(OrisamoAudio.Sfx.KnockOut);
+
+        const float total = 1.6f;
+        for (float t = 0f; t < total; t += Time.unscaledDeltaTime)
+        {
+            float slam = OrisamoUI.EaseOutBack(Mathf.Clamp01(t / 0.22f));
+            float shake = t > 0.18f && t < 0.5f ? (0.5f - t) * 60f : 0f;
+            ko.rectTransform.localScale = Vector3.one * Mathf.LerpUnclamped(3.2f, 1f, slam);
+            ko.rectTransform.anchoredPosition = new Vector2(Random.Range(-shake, shake), 120f + Random.Range(-shake, shake));
+            ko.alpha = t > 1.25f ? 1f - (t - 1.25f) / 0.35f : 1f;
+            yield return null;
+        }
+        Destroy(ko.gameObject);
     }
 
     /// <summary>短い掛け声(「効果はばつぐんだ！」など)。待たずに進めてよい。</summary>

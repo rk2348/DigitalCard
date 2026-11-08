@@ -165,7 +165,12 @@ public sealed class UIButtonMotion : MonoBehaviour, IPointerEnterHandler, IPoint
 
     public void OnPointerEnter(PointerEventData eventData) { if (IsUsable()) targetScale = 1.035f; }
     public void OnPointerExit(PointerEventData eventData) => targetScale = 1f;
-    public void OnPointerDown(PointerEventData eventData) { if (IsUsable()) targetScale = 0.955f; }
+    public void OnPointerDown(PointerEventData eventData)
+    {
+        if (!IsUsable()) return;
+        targetScale = 0.955f;
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Click, 0.6f);
+    }
     public void OnPointerUp(PointerEventData eventData) => targetScale = IsUsable() ? 1.035f : 1f;
     public void Punch()
     {

@@ -118,7 +118,9 @@ public sealed class Fighter3D : MonoBehaviour
         }
         if (auraMaterial != null)
         {
-            auraMaterial.SetColor("_BaseColor", StadiumKit.Hdr(elementColor, 1.4f + Mathf.Sin(t * 2.4f) * 0.5f));
+            // レアカード(突然変異)は輪郭のオーラが虹色に移り変わる
+            Color auraColor = Stats.isMutation ? Color.HSVToRGB(Mathf.Repeat(t * 0.22f, 1f), 0.65f, 1f) : elementColor;
+            auraMaterial.SetColor("_BaseColor", StadiumKit.Hdr(auraColor, (Stats.isMutation ? 2f : 1.4f) + Mathf.Sin(t * 2.4f) * 0.5f));
         }
     }
 
@@ -153,6 +155,16 @@ public sealed class Fighter3D : MonoBehaviour
     public IEnumerator PlayEntrance()
     {
         busy = true;
+        if (Stats.isMutation)
+        {
+            // レアカード: 金の光の柱と火花が先に立ち、少し溜めてから登場する
+            OrisamoAudio.Play(OrisamoAudio.Sfx.Rare);
+            StadiumKit.Pillar(transform.position, OrisamoUI.Gold, 26f, 5.5f, 2.4f);
+            StadiumKit.Burst(transform.position + Vector3.up * 3f, OrisamoUI.GoldLight, 120, 6f, 0.5f);
+            StadiumKit.Shockwave(transform.position, OrisamoUI.Gold, 10f, 0.9f);
+            yield return new WaitForSeconds(0.6f);
+        }
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Charge, 0.7f, 0.8f);
         StadiumKit.Pillar(transform.position, elementColor, 16f, 3.6f, 1.6f);
         yield return new WaitForSeconds(0.25f);
         StadiumKit.Shockwave(transform.position, elementColor, 7f, 0.7f);
@@ -254,6 +266,7 @@ public sealed class Fighter3D : MonoBehaviour
     public IEnumerator PlaySpecialCharge()
     {
         busy = true;
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Special);
         StadiumKit.Pillar(transform.position, elementColor, 20f, 4.4f, 1.3f);
         StadiumKit.Burst(ChestPoint, elementColor, 50, 7f);
         yield return Animate(0.9f, p =>
@@ -266,32 +279,92 @@ public sealed class Fighter3D : MonoBehaviour
         busy = false;
     }
 
-    /// <summary>戦闘不能: 後ろへ倒れ込み、光の粒になって消える。</summary>
-    public IEnumerator PlayFaint()
+    /// <summary>
+    /// 戦闘不能: 衝撃でひしゃげ → 攻撃と反対側へ放物線を描いて吹き飛びながら倒れる → 着地して跳ね返り、
+    /// 少し滑って横たわる → 色が抜け、魂のような光の粒が昇る。体は消さずにフィールドに残す。
+    /// 足元を支点に、上端が吹き飛ぶ向きへ倒れるよう回転させる。onLanded は最初に地面に落ちた瞬間に呼ぶ(カメラの揺れ用)。
+    /// </summary>
+    public IEnumerator PlayFaint(Vector3 attackerPosition, Action onLanded = null)
     {
         fainted = true;
         busy = true;
-        float away = IsPlayer1 ? 1f : -1f;
+
+        Vector3 away = transform.position - attackerPosition;
+        away.y = 0f;
+        if (away.sqrMagnitude < 0.01f) away = IsPlayer1 ? Vector3.left : Vector3.right;
+        away.Normalize();
+        Vector3 awayLocal = transform.InverseTransformDirection(away);
+        Vector3 axisLocal = transform.InverseTransformDirection(Vector3.Cross(Vector3.up, away));
         Vector3 start = visual.localPosition;
-        yield return Animate(0.8f, p =>
+        Color impactFlash = new Color(4f, 3.6f, 3.2f, 1f);
+
+        // A: 衝撃でひしゃげる
+        yield return Animate(0.12f, p =>
         {
-            float e = OrisamoUI.EaseOutCubic(p);
-            visual.localRotation = Quaternion.Euler(0f, 0f, 80f * e * away);
-            visual.localPosition = start + new Vector3(-away * 0.9f * e, -0.3f * e, 0f);
-            Tint(new Color(0.35f, 0.35f, 0.42f, 1f), e * 0.7f); // 色が抜けて灰色になる
+            visual.localScale = Vector3.Lerp(Vector3.one, new Vector3(1.18f, 0.82f, 1f), Mathf.Sin(p * Mathf.PI));
+            Tint(impactFlash, 1f - p * 0.4f);
         });
-        yield return new WaitForSeconds(0.35f);
-        StadiumKit.Burst(ChestPoint, elementColor, 70, 5f, 0.5f);
-        Vector3 lying = visual.localScale;
-        yield return Animate(0.3f, p => visual.localScale = lying * (1f - p));
+
+        // B: 吹き飛びながら倒れる(横はすぐに勢いが落ち、縦は放物線)
+        const float distance = 4.4f;
+        const float peak = 2.4f;
+        Vector3 landed = start + awayLocal * distance;
+        landed.y = 0.25f; // 横たわった時に厚みの分だけ床から浮かせる
+        yield return Animate(0.75f, p =>
+        {
+            Vector3 flat = Vector3.Lerp(start, landed, OrisamoUI.EaseOutCubic(p));
+            visual.localPosition = flat + Vector3.up * (4f * peak * p * (1f - p));
+            visual.localRotation = Quaternion.AngleAxis(90f * Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(p * 1.15f)), axisLocal);
+            visual.localScale = Vector3.Lerp(new Vector3(1.18f, 0.82f, 1f), Vector3.one, Mathf.Clamp01(p * 3f));
+            Tint(impactFlash, 0.6f * (1f - p));
+        });
+        Tint(Color.white, 0f);
+
+        // C: 着地 → 跳ね返り → 滑って止まる
+        Vector3 landedWorld = transform.TransformPoint(new Vector3(landed.x, 0f, landed.z));
+        StadiumKit.Burst(landedWorld + Vector3.up * 0.3f + away * (Height * 0.4f), new Color(0.78f, 0.72f, 0.62f), 60, 4.5f, 0.7f);
+        StadiumKit.Shockwave(landedWorld + away * (Height * 0.4f), new Color(1f, 0.9f, 0.7f), 5f, 0.45f);
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Land);
+        onLanded?.Invoke();
+
+        Vector3 bounced = landed + awayLocal * 0.9f;
+        yield return Animate(0.36f, p =>
+        {
+            float arc = Mathf.Sin(p * Mathf.PI);
+            visual.localPosition = Vector3.Lerp(landed, bounced, OrisamoUI.EaseOutCubic(p)) + Vector3.up * (arc * 0.7f);
+            visual.localRotation = Quaternion.AngleAxis(90f - arc * 14f, axisLocal);
+        });
+        StadiumKit.Burst(transform.TransformPoint(new Vector3(bounced.x, 0.3f, bounced.z)) + away * (Height * 0.4f), new Color(0.78f, 0.72f, 0.62f), 25, 3f, 0.5f);
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Land, 0.5f, 1.2f);
+
+        Vector3 rest = bounced + awayLocal * 0.35f;
+        yield return Animate(0.28f, p =>
+        {
+            float arc = Mathf.Sin(p * Mathf.PI);
+            visual.localPosition = Vector3.Lerp(bounced, rest, OrisamoUI.EaseOutCubic(p)) + Vector3.up * (arc * 0.15f);
+            visual.localRotation = Quaternion.AngleAxis(90f - arc * 4f, axisLocal);
+        });
+        visual.localPosition = rest;
+        visual.localRotation = Quaternion.AngleAxis(90f, axisLocal);
+
+        // D: 色が抜けて、光の粒が昇る(体はそのまま横たわらせておく)
         SetRoleColor(new Color(0.25f, 0.25f, 0.3f));
-        visual.gameObject.SetActive(false);
+        Color grey = new Color(0.35f, 0.35f, 0.42f, 1f);
+        Color auraStart = auraMaterial != null ? auraMaterial.GetColor("_BaseColor") : Color.black;
+        yield return Animate(0.7f, p =>
+        {
+            Tint(grey, 0.75f * p);
+            if (auraMaterial != null) auraMaterial.SetColor("_BaseColor", Color.Lerp(auraStart, Color.black, p));
+        });
+        Vector3 bodyCenter = transform.TransformPoint(rest + Vector3.up * 0.4f) + away * (Height * 0.5f);
+        StadiumKit.Burst(bodyCenter, elementColor, 45, 2.5f, 0.45f);
     }
 
     /// <summary>勝利: 2回跳ねて喜ぶ。</summary>
     public IEnumerator PlayVictory()
     {
         busy = true;
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Victory);
         StadiumKit.Burst(ChestPoint, OrisamoUI.Gold, 80, 9f);
         Vector3 start = visual.localPosition;
         for (int hop = 0; hop < 2; hop++)

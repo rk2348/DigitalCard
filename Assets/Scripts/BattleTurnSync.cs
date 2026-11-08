@@ -73,7 +73,7 @@ public class BattleTurnSync : MonoBehaviour
     public bool DefenderChosen { get; private set; }
 
     /// <summary>選択の制限時間の残り秒数。</summary>
-    public float SecondsRemaining => IsWaitingForChoices ? Mathf.Max(0f, choiceDeadline - Time.time) : 0f;
+    public float SecondsRemaining => IsWaitingForChoices ? Mathf.Max(0f, choiceDeadline - Time.unscaledTime) : 0f;
 
     public float ChoiceTimeoutSeconds => choiceTimeoutSeconds;
 
@@ -101,7 +101,7 @@ public class BattleTurnSync : MonoBehaviour
         foreach (PresenceState state in new[] { player1Presence, player2Presence })
         {
             state.lastValue = 0;
-            state.lastChangeTime = Time.time;
+            state.lastChangeTime = Time.unscaledTime;
             state.seen = false;
         }
         if (presenceRoutine != null) StopCoroutine(presenceRoutine);
@@ -112,13 +112,13 @@ public class BattleTurnSync : MonoBehaviour
     public bool IsDisconnected(string slot)
     {
         PresenceState state = slot == "player1" ? player1Presence : player2Presence;
-        return state.seen && Time.time - state.lastChangeTime > disconnectGraceSeconds;
+        return state.seen && Time.unscaledTime - state.lastChangeTime > disconnectGraceSeconds;
     }
 
     /// <summary>試合中ずっと、両スマホの生存信号を見張る(演出中に途切れても気づけるように、ターンとは独立して回す)。</summary>
     private IEnumerator PollPresence()
     {
-        WaitForSeconds wait = new WaitForSeconds(pollIntervalSeconds);
+        WaitForSecondsRealtime wait = new WaitForSecondsRealtime(pollIntervalSeconds);
         while (matchInProgress)
         {
             yield return FirebaseRest.Get($"{BattlePath}/presence", req =>
@@ -148,7 +148,7 @@ public class BattleTurnSync : MonoBehaviour
     {
         if (value == 0 || value == state.lastValue) return;
         state.lastValue = value;
-        state.lastChangeTime = Time.time;
+        state.lastChangeTime = Time.unscaledTime;
         state.seen = true;
     }
 
@@ -172,18 +172,18 @@ public class BattleTurnSync : MonoBehaviour
         while (!written)
         {
             yield return FirebaseRest.Write("PATCH", BattlePath, turnJson, ok => written = ok);
-            if (!written) yield return new WaitForSeconds(pollIntervalSeconds);
+            if (!written) yield return new WaitForSecondsRealtime(pollIntervalSeconds);
         }
 
-        float deadline = Time.time + choiceTimeoutSeconds;
+        float deadline = Time.unscaledTime + choiceTimeoutSeconds;
         choiceDeadline = deadline;
         AttackerChosen = DefenderChosen = false;
         IsWaitingForChoices = true;
         ChoiceRecord latest = null;
 
-        while (Time.time < deadline)
+        while (Time.unscaledTime < deadline)
         {
-            yield return new WaitForSeconds(pollIntervalSeconds);
+            yield return new WaitForSecondsRealtime(pollIntervalSeconds);
 
             yield return FirebaseRest.Get($"{BattlePath}/choices/{turnNumber}", req =>
             {
@@ -228,6 +228,21 @@ public class BattleTurnSync : MonoBehaviour
         result.attacker = ParseLevel(latest?.attacker);
         result.defender = ParseLevel(latest?.defender);
         onResolved(result);
+    }
+
+    private int hitSequence;
+
+    /// <summary>
+    /// 攻撃が命中したことをスマホ側に伝える(スマホはこれを見て振動する)。完了は待たない。
+    /// defenderSlot は当たった側、knockout はこの一撃で決着がついたかどうか。
+    /// </summary>
+    public void WriteHit(string defenderSlot, int damage, bool knockout)
+    {
+        if (!matchInProgress) return;
+        hitSequence++;
+        string json = "{\"lastHit\":{\"slot\":\"" + defenderSlot + "\",\"damage\":" + damage +
+                      ",\"ko\":" + (knockout ? "true" : "false") + ",\"seq\":" + hitSequence + "}}";
+        FirebaseRest.WriteFireAndForget("PATCH", BattlePath, json);
     }
 
     /// <summary>

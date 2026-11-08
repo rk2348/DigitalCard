@@ -62,6 +62,7 @@ public sealed class Stadium : MonoBehaviour
     public void Cheer(float strength = 1f)
     {
         excitement = Mathf.Max(excitement, strength);
+        if (strength >= 0.8f) OrisamoAudio.Play(OrisamoAudio.Sfx.Cheer, strength * 0.8f);
     }
 
     /// <summary>LEDボードと縁の光を一時的に指定色にする。</summary>
@@ -75,6 +76,7 @@ public sealed class Stadium : MonoBehaviour
     {
         float t = Time.time;
         excitement = Mathf.MoveTowards(excitement, 0f, Time.deltaTime * 0.35f);
+        OrisamoAudio.SetCrowd(excitement);
 
         // 観客: グループごとに位相をずらして跳ねる
         float amplitude = 0.025f + excitement * 0.35f;

@@ -13,10 +13,8 @@ using UnityEngine.SceneManagement;
 /// 1. タイトルシーンに空のGameObjectを作成し、このスクリプトをアタッチ
 /// 2. GameManagerもタイトルシーンに配置しておく
 /// 3. Build Settingsに "QRCreation" "Battle" のシーンを追加しておく（インスペクターでシーン名を変更可）
-/// 4. UI上にボタンを用意し、それぞれ
-///      「バトルへ」ボタン                → GoToBattle()
-///      「QRコード作成（開発者用）」ボタン  → GoToCharacterCreation()
-///    をOnClickに登録する
+/// 4. ボタン(「バトルをはじめる」「QRコード作成」「登録カード一覧」)とCanvasは TitleScreenView がコードで生成するため、
+///    シーンに置く必要はない
 /// 5. 本番運用でQRコード作成（開発者画面）ボタンを一般利用者に見せたくない場合は、
 ///    そのボタンのGameObjectを developerModeButton にドラッグし、
 ///    showDeveloperMode をオフにすればタイトル画面から非表示にできる

@@ -19,6 +19,21 @@ public static class BattleRules
     /// <summary>必殺技レベルの算出で、能力値用の乱数列と重ならないようにシードに混ぜる値。</summary>
     public const uint SpecialLevelSalt = 0x5bd1e995u;
 
+    public static float TieDamageMultiplier(int consecutiveTies)
+    {
+        return 1f + Math.Max(0, Math.Min(10, consecutiveTies)) * 0.1f;
+    }
+
+    public static bool IsCritical(double roll, float chance)
+    {
+        return roll >= 0 && roll < Math.Max(0, Math.Min(1, chance));
+    }
+
+    public static int ApplyCritical(int damage, bool critical, float multiplier)
+    {
+        return critical ? Math.Max(1, (int)Math.Round(damage * Math.Max(1f, multiplier))) : damage;
+    }
+
     /// <summary>
     /// 命中時の最終ダメージを求める(防御成功の判定は呼び出し側で先に行う)。
     /// 基礎ダメージ = max(MinBaseDamage, 実効ATK − 実効DEF × DefenseFactor)

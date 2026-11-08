@@ -24,14 +24,7 @@ public static class StadiumKit
     /// <summary>URP Litの不透明マテリアル。両面描画にしてあるので、手続き生成した面の向きを気にしなくてよい。</summary>
     public static Material Lit(Color color, float smoothness = 0.25f, float metallic = 0f)
     {
-        if (litTemplate == null)
-        {
-            GameObject probe = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            litTemplate = probe.GetComponent<Renderer>().sharedMaterial;
-            Object.Destroy(probe);
-        }
-
-        Material material = new Material(litTemplate);
+        Material material = new Material(LitTemplate());
         material.SetColor("_BaseColor", color);
         material.color = color;
         material.SetFloat("_Smoothness", smoothness);
@@ -40,13 +33,57 @@ public static class StadiumKit
         return material;
     }
 
+    /// <summary>
+    /// URP Lit のひな形。Resources/Stadium/StadiumLit.mat を使う。
+    /// (以前はプリミティブの既定マテリアルを流用していたが、ビルドではURPの既定マテリアルが含まれず
+    ///  ビルトインの Standard シェーダーになってピンク色になるため、自前のマテリアルを持つ)
+    /// </summary>
+    private static Material LitTemplate()
+    {
+        if (litTemplate != null) return litTemplate;
+
+        litTemplate = Resources.Load<Material>("Stadium/StadiumLit");
+        if (!IsUsable(litTemplate))
+        {
+            Shader lit = Shader.Find("Universal Render Pipeline/Lit");
+            litTemplate = lit != null && lit.isSupported ? new Material(lit) : null;
+        }
+        if (litTemplate == null)
+        {
+            Debug.LogError("StadiumKit: URP Lit シェーダーが見つかりません。Resources/Stadium/StadiumLit.mat を確認してください。");
+            litTemplate = Resources.Load<Material>("Stadium/StadiumOpaque");
+        }
+        return litTemplate;
+    }
+
+    /// <summary>マテリアルのシェーダーが現在の環境(URP)で描画できるか。できないとピンク色になる。</summary>
+    public static bool IsUsable(Material material)
+    {
+        return material != null && material.shader != null && material.shader.isSupported &&
+               material.shader.name != "Hidden/InternalErrorShader" && !material.shader.name.StartsWith("Standard");
+    }
+
+    /// <summary>
+    /// GameObject.CreatePrimitive で作ったオブジェクトに、URPで描画できるマテリアルを付け直す。
+    /// (ビルドでは既定マテリアルがピンク色になることがあるため、プリミティブを作ったら必ず通す)
+    /// </summary>
+    public static void ApplyLit(GameObject go, Color color, float smoothness = 0.25f, float metallic = 0f)
+    {
+        Renderer renderer = go != null ? go.GetComponent<Renderer>() : null;
+        if (renderer != null) renderer.sharedMaterial = Lit(color, smoothness, metallic);
+    }
+
     /// <summary>URP Particles/Unlitのマテリアル。colorはHDR(1を超える値)にするとBloomで光って見える。</summary>
     public static Material Unlit(Blend blend, Color color, Texture texture = null)
     {
         if (!unlitTemplates.TryGetValue(blend, out Material template) || template == null)
         {
             template = Resources.Load<Material>("Stadium/Stadium" + blend);
-            if (template == null) template = new Material(Shader.Find("Universal Render Pipeline/Particles/Unlit"));
+            if (template == null)
+            {
+                Shader unlit = Shader.Find("Universal Render Pipeline/Particles/Unlit");
+                template = unlit != null ? new Material(unlit) : new Material(LitTemplate());
+            }
             unlitTemplates[blend] = template;
         }
 

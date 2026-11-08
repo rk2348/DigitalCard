@@ -44,11 +44,7 @@ public static class CharacterModelUtility
                 instance.transform.SetParent(spawnPoint);
             }
 
-            Renderer renderer = instance.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                renderer.material.color = GetElementColor(stats.element);
-            }
+            StadiumKit.ApplyLit(instance, GetElementColor(stats.element));
         }
 
         instance.name = "CharacterModel_" + stats.characterName;

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 /// <summary>
@@ -199,6 +200,43 @@ public static class OrisamoUI
     }
 
     // ==================== 生成ヘルパー ====================
+
+    /// <summary>
+    /// 現在のシーンに置かれた最上位のScreen Space Overlay Canvasを返す(なければnull)。
+    /// VersionLabelなどがDontDestroyOnLoadで作るCanvas(GraphicRaycasterなし=押せない)を拾わないよう、シーンで絞る。
+    /// </summary>
+    public static Canvas FindSceneCanvas()
+    {
+        Scene scene = SceneManager.GetActiveScene();
+        foreach (Canvas canvas in Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None))
+        {
+            if (canvas.isRootCanvas && canvas.renderMode == RenderMode.ScreenSpaceOverlay && canvas.gameObject.scene == scene) return canvas;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// シーンのCanvasを返す。シーンにCanvas(やEventSystem)が置かれていなければ作る。
+    /// 画面はすべてコードで組み立てるので、シーン側に置いておくのはカメラと管理用のGameObjectだけでよい。
+    /// </summary>
+    public static Canvas EnsureSceneCanvas()
+    {
+        if (Object.FindAnyObjectByType<UnityEngine.EventSystems.EventSystem>() == null)
+        {
+            new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem),
+                typeof(UnityEngine.InputSystem.UI.InputSystemUIInputModule));
+        }
+
+        Canvas canvas = FindSceneCanvas();
+        if (canvas != null) return canvas;
+
+        GameObject go = new GameObject("Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+        canvas = go.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        UIAnimationDirector.ConfigureScaler(canvas);
+        go.AddComponent<UIAnimationDirector>();
+        return canvas;
+    }
 
     public static RectTransform CreateRect(string name, Transform parent)
     {

@@ -18,6 +18,10 @@
       }
     },
 
+    "cardStats": {
+      ".read": "auth != null"
+    },
+
     "tables": {
       "$tableId": {
         "battleSlots": {
