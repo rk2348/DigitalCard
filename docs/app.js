@@ -91,19 +91,13 @@ const SKILL_NAME_MAP = {
 };
 
 /// 実際に効果へ掛ける倍率(C#の CharacterSkill.EffectRatio と同じ式にすること)。
+const SKILL_EFFECT_SCALE = {
+  // 対戦シミュレーションで、どのスキルも勝率がほぼ50%になるよう調整した倍率(C#の EffectRatio と同じ)
+  PowerBoost: 0.6, GuardBoost: 1.1, LifeDrain: 2, Overdrive: 1.2, IronFist: 0.4, Desperation: 0.16, ElementMastery: 0.66,
+  FirstStrike: 2.6, Evasion: 0.95, Counter: 0.6, Shield: 2, Regeneration: 0.4, Intimidate: 0.66, Endurance: 0.18,
+};
 function skillEffectRatio(skillType, ratio) {
-  switch (skillType) {
-    case "Desperation":
-    case "Evasion":
-    case "Endurance":
-      return ratio * 0.5;
-    case "FirstStrike":
-      return ratio * 2;
-    case "Shield":
-      return ratio * 3;
-    default:
-      return ratio;
-  }
+  return ratio * (SKILL_EFFECT_SCALE[skillType] ?? 1);
 }
 
 function buildSkillDescription(skillType, ratio) {
@@ -122,7 +116,7 @@ function buildSkillDescription(skillType, ratio) {
     case "Desperation":
       return `減ったHPの${percent}%を攻撃力に加算`;
     case "ElementMastery":
-      return `有利な属性への攻撃のダメージが${percent}%アップ`;
+      return `不利な属性以外の相手へのダメージが${percent}%アップ`;
     case "FirstStrike":
       return `最初に当てた攻撃のダメージが${percent}%アップ`;
     case "Evasion":
@@ -130,7 +124,7 @@ function buildSkillDescription(skillType, ratio) {
     case "Counter":
       return `受けたダメージの${percent}%を相手に返す`;
     case "Shield":
-      return `戦闘開始時、防御力の${percent}%分のダメージを防ぐ結界を張る`;
+      return `戦闘開始時、防御力の${percent}%分の結界を張る(1回の攻撃で半分まで防ぐ)`;
     case "Regeneration":
       return `自分の攻撃ターンの終わりに、防御力の${percent}%回復`;
     case "Intimidate":
@@ -144,9 +138,11 @@ function buildSkillDescription(skillType, ratio) {
 
 /// seedとキャラクター名から、確定したステータスを生成する。
 /// 戻り値の形式はUnity側から返していたレスポンスJSONと同じ(showStatusDisplayでそのまま使える)。
-const STAT_BUDGET = 18;   // 攻撃・防御に配分する合計(攻撃+1 = 防御+2)
+// スキル・属性込みのシミュレーションで調整(1試合が平均13回ほどの攻防で決着し、どの配分でも勝率がほぼ同じ)
+const ATTACK_BASE = 17;   // 攻撃の最低値
+const STAT_BUDGET = 16;   // 攻撃・防御に配分する合計(攻撃+1 = 防御+2)
 const DEFENSE_COST = 0.5; // 防御1あたりのコスト(攻撃1に対して)
-const SPEED_COST = 0.03;  // 素早さ1あたりのコスト
+const SPEED_COST = 0.18;  // 素早さ1あたりのコスト
 
 /// elementOverride: 絵の色から決めた属性(なければシード値で決める)
 function generateCharacterStats(seed, characterName, elementOverride = null) {
@@ -159,7 +155,7 @@ function generateCharacterStats(seed, characterName, elementOverride = null) {
   let speed = nextInt(5, 21);
   const budget = STAT_BUDGET - (speed - 5) * SPEED_COST;
   const attackShare = 0.25 + rand() * 0.5; // 攻撃に回す割合(25〜75%)
-  let attack = 10 + Math.round(budget * attackShare);
+  let attack = ATTACK_BASE + Math.round(budget * attackShare);
   let defense = 5 + Math.round((budget * (1 - attackShare)) / DEFENSE_COST);
   const maxHp = 100;
   const hp = maxHp;

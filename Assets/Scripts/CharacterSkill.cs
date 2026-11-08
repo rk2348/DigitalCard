@@ -15,7 +15,7 @@ public enum SkillType
     Overdrive,      // 必殺技で攻撃力に応じた追加ダメージ
     IronFist,       // 鉄拳の構え: 防御力の一部を攻撃力に上乗せ(常時)
     Desperation,    // 背水の陣: 減ったHPの一部を攻撃力に上乗せ(常時)
-    ElementMastery, // 属性の極み: 有利属性への攻撃のダメージアップ
+    ElementMastery, // 属性の極み: 不利な属性以外の相手へのダメージアップ
     FirstStrike,    // 先手必勝: 最初に当てた攻撃のダメージアップ(1回)
     Evasion,        // 見切り: 相手より素早いとき受けるダメージを軽減
     Counter,        // 反撃の構え: 受けたダメージの一部を相手に返す
@@ -81,18 +81,24 @@ public class CharacterSkill
     {
         get
         {
+            // 倍率は対戦シミュレーション(スキル・属性・必殺技込み)で、どのスキルも勝率がほぼ50%になるよう調整した値
             switch (skillType)
             {
-                case SkillType.Desperation:
-                case SkillType.Evasion:
-                case SkillType.Endurance:
-                    return ratio * 0.5f;  // 10〜25%
-                case SkillType.FirstStrike:
-                    return ratio * 2f;    // 40〜100%(1回限りなので大きめ)
-                case SkillType.Shield:
-                    return ratio * 3f;    // 防御力の60〜150%
-                default:
-                    return ratio;         // 20〜50%
+                case SkillType.PowerBoost: return ratio * 0.6f;      // 素早さの12〜30%
+                case SkillType.GuardBoost: return ratio * 1.1f;      // 素早さの22〜55%
+                case SkillType.LifeDrain: return ratio * 2f;         // 与えたダメージの40〜100%
+                case SkillType.Overdrive: return ratio * 1.2f;       // 攻撃力の24〜60%
+                case SkillType.IronFist: return ratio * 0.4f;        // 防御力の8〜20%
+                case SkillType.Desperation: return ratio * 0.16f;    // 減ったHPの3〜8%
+                case SkillType.ElementMastery: return ratio * 0.66f; // 13〜33%アップ
+                case SkillType.FirstStrike: return ratio * 2.6f;     // 52〜130%アップ(1回限り)
+                case SkillType.Evasion: return ratio * 0.95f;        // 19〜48%軽減
+                case SkillType.Counter: return ratio * 0.6f;         // 受けたダメージの12〜30%
+                case SkillType.Shield: return ratio * 2f;            // 防御力の40〜100%(1回の攻撃で半分まで防ぐ)
+                case SkillType.Regeneration: return ratio * 0.4f;    // 防御力の8〜20%
+                case SkillType.Intimidate: return ratio * 0.66f;     // 攻撃力の13〜33%
+                case SkillType.Endurance: return ratio * 0.18f;      // 最大HPの4〜9%
+                default: return ratio;
             }
         }
     }
@@ -118,7 +124,7 @@ public class CharacterSkill
             case SkillType.Desperation:
                 return $"減ったHPの{percent}%を攻撃力に加算";
             case SkillType.ElementMastery:
-                return $"有利な属性への攻撃のダメージが{percent}%アップ";
+                return $"不利な属性以外の相手へのダメージが{percent}%アップ";
             case SkillType.FirstStrike:
                 return $"最初に当てた攻撃のダメージが{percent}%アップ";
             case SkillType.Evasion:
@@ -126,7 +132,7 @@ public class CharacterSkill
             case SkillType.Counter:
                 return $"受けたダメージの{percent}%を相手に返す";
             case SkillType.Shield:
-                return $"戦闘開始時、防御力の{percent}%分のダメージを防ぐ結界を張る";
+                return $"戦闘開始時、防御力の{percent}%分の結界を張る(1回の攻撃で半分まで防ぐ)";
             case SkillType.Regeneration:
                 return $"自分の攻撃ターンの終わりに、防御力の{percent}%回復";
             case SkillType.Intimidate:

@@ -38,6 +38,7 @@ public class CharacterStats
     [NonSerialized] public int defenseDebuff;     // 相手の威圧で下げられた防御力
     [NonSerialized] public bool firstStrikeUsed;  // 先手必勝を使ったか
     [NonSerialized] public bool enduranceUsed;    // 不屈の魂を使ったか
+    [NonSerialized] public bool desperationShown; // 背水の陣の発動演出を見せたか
 
     /// <summary>試合開始時に、バトル中だけの状態をまっさらに戻す。</summary>
     public void ResetBattleState()
@@ -46,6 +47,7 @@ public class CharacterStats
         defenseDebuff = 0;
         firstStrikeUsed = false;
         enduranceUsed = false;
+        desperationShown = false;
     }
 
     /// <summary>指定したスキルを持っているか。</summary>
@@ -123,16 +125,18 @@ public class CharacterStats
 
     // 攻撃・防御に配分する合計(攻撃+1 = 防御+2)。対戦シミュレーションで、どの振り分けでも勝率が
     // ほぼ同じ(大半が40〜60%)になるよう調整した値。素早さは先攻を決めるだけなので少しだけ差し引く
-    private const float StatBudget = 18f;
+    // (2026-11 スキル・属性込みのシミュレーションで再調整。1試合が平均13回ほどの攻防で決着するように)
+    private const int AttackBase = 17;
+    private const float StatBudget = 16f;
     private const float DefenseCost = 0.5f;
-    private const float SpeedCost = 0.03f;
+    private const float SpeedCost = 0.18f;
 
     /// <summary>speedを決めた後に呼ぶ。roll(0〜1)で攻撃に回す割合(25〜75%)を決め、残りを防御に回す。</summary>
     private void AllocateAttackDefense(float roll)
     {
         float budget = StatBudget - (speed - 5) * SpeedCost;
         float attackShare = 0.25f + roll * 0.5f;
-        attack = 10 + (int)Math.Round(budget * attackShare, MidpointRounding.AwayFromZero);
+        attack = AttackBase + (int)Math.Round(budget * attackShare, MidpointRounding.AwayFromZero);
         defense = 5 + (int)Math.Round(budget * (1f - attackShare) / DefenseCost, MidpointRounding.AwayFromZero);
     }
 

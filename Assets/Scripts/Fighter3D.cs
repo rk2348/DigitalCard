@@ -237,6 +237,114 @@ public sealed class Fighter3D : MonoBehaviour
         busy = false;
     }
 
+    /// <summary>あいこ(防御成功)の時のよけ方。</summary>
+    public enum DodgeStyle { Guard, SideStep, Jump, BackFlip, Duck, Blink, Spin }
+
+    /// <summary>メッセージ用の言い回し(「〇〇は △△！」の△△)。</summary>
+    public static string DodgeVerb(DodgeStyle style)
+    {
+        switch (style)
+        {
+            case DodgeStyle.SideStep: return "サイドステップでかわした";
+            case DodgeStyle.Jump: return "高くジャンプしてかわした";
+            case DodgeStyle.BackFlip: return "宙返りでかわした";
+            case DodgeStyle.Duck: return "しゃがんでかわした";
+            case DodgeStyle.Blink: return "残像を残してかわした";
+            case DodgeStyle.Spin: return "くるりと回って受け流した";
+            default: return "防いだ";
+        }
+    }
+
+    /// <summary>
+    /// 攻撃をよける動き。delay秒待ってから(相手が突っ込んでくる瞬間に合わせて)動き出す。
+    /// Guard は従来の光の盾(PlayGuard)を使う。
+    /// </summary>
+    public IEnumerator PlayDodge(Vector3 attackerPosition, DodgeStyle style, float delay = 0f)
+    {
+        if (style == DodgeStyle.Guard) { yield return PlayGuard(); yield break; }
+        busy = true;
+        if (delay > 0f) yield return new WaitForSeconds(delay);
+        Vector3 start = visual.localPosition;
+        Vector3 away = transform.position - attackerPosition;
+        away.y = 0f;
+        away.Normalize();
+        Vector3 sideDir = Vector3.Cross(Vector3.up, away).normalized; // 奥(または手前)方向
+        Color dodgeColor = OrisamoUI.DefenseColor;
+
+        switch (style)
+        {
+            case DodgeStyle.SideStep:
+                // 素早く横へ跳んで、体を傾けたまま戻る。元の位置に光の残像
+                StadiumKit.Burst(ChestPoint, dodgeColor, 24, 4f, 0.3f);
+                yield return Animate(0.55f, p =>
+                {
+                    float o = p < 0.35f ? OrisamoUI.EaseOutCubic(p / 0.35f) : 1f - OrisamoUI.EaseOutCubic((p - 0.35f) / 0.65f);
+                    visual.localPosition = start + sideDir * 2.6f * o + Vector3.up * Mathf.Sin(o * Mathf.PI) * 0.3f;
+                    visual.localRotation = Quaternion.AngleAxis(-18f * o, away);
+                });
+                break;
+            case DodgeStyle.Jump:
+                // 真上に高く跳び、空中で1回転して着地(着地でつぶれる)
+                yield return Animate(0.12f, p => visual.localScale = new Vector3(1f + 0.15f * p, 1f - 0.2f * p, 1f));
+                yield return Animate(0.62f, p =>
+                {
+                    visual.localPosition = start + Vector3.up * (4.2f * 4f * p * (1f - p));
+                    visual.localRotation = Quaternion.AngleAxis(360f * OrisamoUI.EaseOutCubic(p), Vector3.up);
+                    visual.localScale = Vector3.Lerp(new Vector3(1.15f, 0.8f, 1f), new Vector3(0.92f, 1.1f, 1f), Mathf.Sin(p * Mathf.PI));
+                });
+                StadiumKit.Shockwave(transform.position, dodgeColor, 3.5f, 0.4f);
+                yield return Animate(0.14f, p => visual.localScale = Vector3.Lerp(new Vector3(1.2f, 0.78f, 1f), Vector3.one, p));
+                break;
+            case DodgeStyle.BackFlip:
+                // 後ろへ宙返りして下がり、着地後に元の位置へ戻る
+                Vector3 flipAxis = Vector3.Cross(Vector3.up, -away).normalized;
+                yield return Animate(0.6f, p =>
+                {
+                    visual.localPosition = start + away * 2.6f * OrisamoUI.EaseOutCubic(p) + Vector3.up * (3.2f * 4f * p * (1f - p));
+                    visual.localRotation = Quaternion.AngleAxis(360f * Mathf.SmoothStep(0f, 1f, p), flipAxis);
+                });
+                StadiumKit.Shockwave(transform.position + away * 2.6f, dodgeColor, 3f, 0.4f);
+                Vector3 landedFlip = visual.localPosition;
+                yield return Animate(0.3f, p => visual.localPosition = Vector3.Lerp(landedFlip, start, OrisamoUI.EaseOutCubic(p)));
+                break;
+            case DodgeStyle.Duck:
+                // ぺたっと低くしゃがんで頭の上をやり過ごし、ぴょんと戻る
+                yield return Animate(0.14f, p => visual.localScale = Vector3.Lerp(Vector3.one, new Vector3(1.35f, 0.45f, 1f), OrisamoUI.EaseOutCubic(p)));
+                yield return new WaitForSeconds(0.28f);
+                yield return Animate(0.3f, p =>
+                {
+                    visual.localScale = Vector3.LerpUnclamped(new Vector3(1.35f, 0.45f, 1f), Vector3.one, OrisamoUI.EaseOutBack(p));
+                    visual.localPosition = start + Vector3.up * Mathf.Sin(p * Mathf.PI) * 0.6f;
+                });
+                break;
+            case DodgeStyle.Blink:
+                // 光って消え、少し後ろに現れる(残像)。そのあと元の位置へ滑って戻る
+                StadiumKit.Burst(ChestPoint, Color.white, 40, 6f, 0.35f);
+                ElementalEffects.FlashLight(ChestPoint, dodgeColor, 5f, 10f, 0.3f);
+                yield return Animate(0.1f, p => visual.localScale = new Vector3(1f - p, 1f + p * 0.4f, 1f));
+                visual.localPosition = start + away * 3.2f + sideDir * 1.2f;
+                yield return new WaitForSeconds(0.18f);
+                StadiumKit.Burst(transform.position + away * 3.2f + sideDir * 1.2f + Vector3.up * Height * 0.55f, dodgeColor, 30, 5f, 0.3f);
+                yield return Animate(0.12f, p => visual.localScale = new Vector3(p, 1.4f - p * 0.4f, 1f));
+                Vector3 blinked = visual.localPosition;
+                yield return Animate(0.35f, p => visual.localPosition = Vector3.Lerp(blinked, start, OrisamoUI.EaseOutCubic(p)));
+                break;
+            case DodgeStyle.Spin:
+                // その場で素早く2回転して攻撃を受け流す。足元に光の輪
+                StadiumKit.Shockwave(transform.position, dodgeColor, 4f, 0.5f);
+                yield return Animate(0.55f, p =>
+                {
+                    visual.localRotation = Quaternion.AngleAxis(720f * OrisamoUI.EaseOutCubic(p), Vector3.up);
+                    visual.localPosition = start + Vector3.up * Mathf.Sin(p * Mathf.PI) * 0.5f;
+                });
+                break;
+        }
+        visual.localPosition = start;
+        visual.localRotation = Quaternion.identity;
+        visual.localScale = Vector3.one;
+        busy = false;
+    }
+
     /// <summary>防御成功: 前面に光の盾が開く。</summary>
     public IEnumerator PlayGuard()
     {

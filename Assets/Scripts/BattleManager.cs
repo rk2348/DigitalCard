@@ -552,6 +552,7 @@ public class BattleManager : MonoBehaviour
         player2.ResetBattleState();
         yield return ApplyBattleStartSkills(first, second);
         yield return ApplyBattleStartSkills(second, first);
+        stadiumCamera.Broadcast(0.6f);
 
         int exchanges = 0;
         while (player1.hp > 0 && player2.hp > 0 && forfeitSlot == null && exchanges < BattleRules.MaxExchanges)
@@ -721,16 +722,29 @@ public class BattleManager : MonoBehaviour
             stadiumCamera.OverShoulder(attackerFighter.Home, defenderFighter.Home);
             ElementalEffects.Charge(attacker.element, attackerFighter.Home, attackerFighter.Height, power);
             yield return new WaitForSeconds(0.55f);
+            // よけ方は毎回ランダム(光の盾・サイドステップ・ジャンプ・宙返り・しゃがむ・残像・回転)
+            Fighter3D.DodgeStyle dodge = (Fighter3D.DodgeStyle)Random.Range(0, System.Enum.GetValues(typeof(Fighter3D.DodgeStyle)).Length);
+            if (dodge != Fighter3D.DodgeStyle.Guard) StartCoroutine(defenderFighter.PlayDodge(attackerFighter.Home, dodge, 0.16f));
             yield return attackerFighter.PlayLunge(defenderFighter.Home, () =>
             {
-                StartCoroutine(defenderFighter.PlayGuard());
-                OrisamoAudio.Play(OrisamoAudio.Sfx.Guard);
-                StadiumKit.Shockwave(defenderFighter.Home, OrisamoUI.DefenseColor, 5f);
-                stadiumCamera.Shake(0.25f);
+                if (dodge == Fighter3D.DodgeStyle.Guard)
+                {
+                    StartCoroutine(defenderFighter.PlayGuard());
+                    OrisamoAudio.Play(OrisamoAudio.Sfx.Guard);
+                    StadiumKit.Shockwave(defenderFighter.Home, OrisamoUI.DefenseColor, 5f);
+                    stadiumCamera.Shake(0.25f);
+                }
+                else
+                {
+                    // 空振り: 風を切る音と、攻撃が通り抜けた所に小さな光
+                    OrisamoAudio.Play(OrisamoAudio.Sfx.Guard, 0.5f, 1.7f);
+                    StadiumKit.Burst(defenderFighter.Home + Vector3.up * defenderFighter.Height * 0.55f, OrisamoUI.WithAlpha(Color.white, 0.8f), 16, 4f, 0.25f);
+                }
                 stadium.Cheer(0.5f);
             });
+            if (dodge != Fighter3D.DodgeStyle.Guard) yield return new WaitForSeconds(0.25f);
             stadiumCamera.Broadcast(0.8f);
-            yield return ShowMessage($"あいこ！　{defender.characterName} は防いだ！　次の攻撃は威力 ×{BattleRules.TieDamageMultiplier(consecutiveTies):0.0}");
+            yield return ShowMessage($"あいこ！　{defender.characterName} は{Fighter3D.DodgeVerb(dodge)}！　次の攻撃は威力 ×{BattleRules.TieDamageMultiplier(consecutiveTies):0.0}");
             ResetRoleColors();
             yield return new WaitForSeconds(turnInterval);
             yield break;
@@ -744,12 +758,13 @@ public class BattleManager : MonoBehaviour
         bool critical = BattleRules.IsCritical(Random.value, criticalChance);
         damage = BattleRules.ApplyCritical(damage, critical, criticalDamageMultiplier);
         // スキル: 属性の極み・先手必勝・見切り
-        string skillNote = ApplyDamageSkills(attacker, defender, elementMultiplier, ref damage);
+        string skillNote = ApplyDamageSkills(attacker, defender, elementMultiplier, ref damage, out string attackerSkillCaption, out bool evaded);
         // スキル: 守護結界が残っていれば、その分だけダメージを肩代わりする
         int shieldAbsorbed = 0;
         if (defender.shieldHp > 0)
         {
-            shieldAbsorbed = Mathf.Min(defender.shieldHp, damage);
+            // 1回の攻撃で防ぐのは半分まで(結界があっても毎回少しはダメージが通る)
+            shieldAbsorbed = Mathf.Min(defender.shieldHp, Mathf.CeilToInt(damage * 0.5f));
             defender.shieldHp -= shieldAbsorbed;
             damage -= shieldAbsorbed;
         }
@@ -782,8 +797,14 @@ public class BattleManager : MonoBehaviour
             stadium.Cheer(0.9f);
             StartCoroutine(hud.PlayBanner($"必殺「{skillName}」", $"{attacker.characterName} の「{OrisamoUI.LevelKanji(attackLevel)}」が炸裂！", attackColor));
             yield return attackerFighter.PlaySpecialCharge();
+            if (attacker.HasSkill(SkillType.Overdrive))
+                yield return PlaySkillActivation(attacker, $"攻撃力の {Mathf.RoundToInt(attacker.skill.EffectRatio * 100)}% を上乗せ！", true);
             yield return new WaitForSeconds(0.5f);
         }
+
+        // スキルの発動演出(攻撃側のダメージアップ → 守る側の見切り)
+        if (attackerSkillCaption != null) yield return PlaySkillActivation(attacker, attackerSkillCaption, true);
+        if (evaded) yield return PlaySkillActivation(defender, $"素早さで見切った！　ダメージ {Mathf.RoundToInt(defender.skill.EffectRatio * 100)}% 軽減", true);
 
         if (heavy || finishing) power *= 1.4f;
         stadiumCamera.OverShoulder(attackerFighter.Home, defenderFighter.Home);
@@ -859,19 +880,31 @@ public class BattleManager : MonoBehaviour
 
         if (enduring)
         {
-            hud.Callout("不屈の魂！", OrisamoUI.Gold);
-            StadiumKit.Burst(defenderFighter.ChestPoint, OrisamoUI.Gold, 60, 6f);
+            StartCoroutine(FinisherSlowMotion());
+            hud.FlashScreen(OrisamoUI.Gold, 0.5f);
+            StadiumKit.Burst(defenderFighter.ChestPoint, OrisamoUI.Gold, 90, 8f);
+            yield return PlaySkillActivation(defender, $"倒れずに踏みとどまった！　HP {defender.hp}");
             stadium.Cheer(1f);
             yield return ShowMessage($"{defender.characterName} は「不屈の魂」で踏みとどまった！(HP {defender.hp})");
+        }
+
+        // 背水の陣: HPが半分を切ったら、攻撃力が上がったことを一度だけ見せる
+        if (defender.hp > 0 && defender.HasSkill(SkillType.Desperation) && !defender.desperationShown && defender.hp * 2 <= defender.maxHp)
+        {
+            defender.desperationShown = true;
+            int bonus = defender.GetEffectiveAttack() - defender.attack;
+            yield return PlaySkillActivation(defender, $"ピンチで力がみなぎる！　攻撃力 +{bonus}（HPが減るほど上がる）", true);
         }
 
         // 生命吸収スキル: 必殺技命中時のみ発動
         if (isSpecial && attacker.skill != null && attacker.skill.skillType == SkillType.LifeDrain)
         {
             int healAmount = Mathf.RoundToInt(damage * attacker.skill.EffectRatio);
+            StadiumKit.Burst(defenderFighter.ChestPoint, SkillHealColor, 40, 5f); // 相手から命を吸い取る
+            yield return PlaySkillActivation(attacker, $"与えたダメージから HP {healAmount} 回復", true);
             attacker.hp = Mathf.Min(attacker.maxHp, attacker.hp + healAmount);
             hud.SetHp(attackerIsPlayer1, attacker.hp, attacker.maxHp);
-            StadiumKit.Burst(attackerFighter.ChestPoint, new Color(0.4f, 1f, 0.5f), 40, 5f);
+            StadiumKit.Burst(attackerFighter.ChestPoint, SkillHealColor, 50, 5f);
             yield return ShowMessage($"{attacker.characterName} は {healAmount} 回復した！");
         }
 
@@ -879,12 +912,20 @@ public class BattleManager : MonoBehaviour
         if (damage > 0 && defender.hp > 0 && defender.HasSkill(SkillType.Counter) && attacker.hp > 1)
         {
             int counter = Mathf.Min(attacker.hp - 1, Mathf.Max(1, Mathf.RoundToInt(damage * defender.skill.EffectRatio)));
-            attacker.hp -= counter;
-            hud.SetHp(attackerIsPlayer1, attacker.hp, attacker.maxHp);
-            StartCoroutine(attackerFighter.PlayHit(defenderFighter.Home, false));
-            hud.SpawnDamageNumber(attackerFighter.HeadPoint, counter, ElementAffinity.GetElementColor(defender.element), false);
-            OrisamoAudio.Play(OrisamoAudio.Sfx.HitWeak);
-            if (IsPhoneMatch) battleTurnSync.WriteHit(attackerIsPlayer1 ? "player1" : "player2", counter, false);
+            yield return PlaySkillActivation(defender, "受けた力をそのまま返す！", true);
+            // 守っていた側が突っ込んで殴り返す
+            yield return defenderFighter.PlayLunge(attackerFighter.Home, () =>
+            {
+                attacker.hp -= counter;
+                hud.SetHp(attackerIsPlayer1, attacker.hp, attacker.maxHp);
+                StartCoroutine(attackerFighter.PlayHit(defenderFighter.Home, true));
+                ElementalEffects.Impact(defender.element, attackerFighter.ChestPoint, attackerFighter.Home, 1f);
+                hud.SpawnDamageNumber(attackerFighter.HeadPoint, counter, ElementAffinity.GetElementColor(defender.element), true);
+                stadiumCamera.Shake(0.8f);
+                OrisamoAudio.Play(OrisamoAudio.Sfx.HitStrong);
+                if (IsPhoneMatch) battleTurnSync.WriteHit(attackerIsPlayer1 ? "player1" : "player2", counter, false);
+            });
+            stadiumCamera.Broadcast(0.8f);
             yield return ShowMessage($"{defender.characterName} の「反撃の構え」！　{attacker.characterName} に {counter} ダメージを返した！");
         }
 
@@ -1125,6 +1166,57 @@ public class BattleManager : MonoBehaviour
         return unit == player1 ? fighter1 : fighter2;
     }
 
+    private static readonly Color SkillAttackColor = new Color(1f, 0.45f, 0.25f);
+    private static readonly Color SkillDefenseColor = new Color(0.4f, 0.7f, 1f);
+    private static readonly Color SkillHealColor = new Color(0.4f, 1f, 0.5f);
+    private static readonly Color SkillTrickColor = new Color(0.78f, 0.45f, 1f);
+
+    /// <summary>スキルの系統ごとの色(攻め=赤橙、守り=青、回復=緑、かく乱=紫、不屈=金)。</summary>
+    private static Color SkillColor(SkillType type)
+    {
+        switch (type)
+        {
+            case SkillType.GuardBoost:
+            case SkillType.Evasion:
+            case SkillType.Shield:
+                return SkillDefenseColor;
+            case SkillType.LifeDrain:
+            case SkillType.Regeneration:
+                return SkillHealColor;
+            case SkillType.Intimidate:
+            case SkillType.Counter:
+                return SkillTrickColor;
+            case SkillType.Endurance:
+                return OrisamoUI.Gold;
+            default:
+                return SkillAttackColor;
+        }
+    }
+
+    /// <summary>
+    /// スキル発動の演出: 足元から光の柱と輪、体から光の粒、スタジアムの照明が系統色に光り、
+    /// 発動した側からスキル名のカットインが飛び込む。quick=false の時はカメラも寄る。
+    /// </summary>
+    private IEnumerator PlaySkillActivation(CharacterStats unit, string caption, bool quick = false)
+    {
+        if (unit == null || unit.skill == null) yield break;
+        Fighter3D fighter = FighterOf(unit);
+        bool isPlayer1 = unit == player1;
+        Color color = SkillColor(unit.skill.skillType);
+        OrisamoAudio.Play(OrisamoAudio.Sfx.Charge, 0.9f, unit.skill.skillType == SkillType.LifeDrain || unit.skill.skillType == SkillType.Regeneration ? 1.3f : 1f);
+        if (fighter != null)
+        {
+            if (!quick) stadiumCamera.CloseUp(fighter.Home, fighter.Height, 0.35f, false, isPlayer1 ? -0.6f : 0.6f);
+            StadiumKit.Pillar(fighter.Home, color, quick ? 12f : 18f, 3.2f, quick ? 0.9f : 1.3f);
+            StadiumKit.Shockwave(fighter.Home, color, quick ? 4.5f : 7f, 0.5f);
+            StadiumKit.Burst(fighter.ChestPoint, color, quick ? 30 : 70, quick ? 5f : 7f);
+            ElementalEffects.FlashLight(fighter.ChestPoint, color, quick ? 4f : 7f, 12f, 0.5f);
+        }
+        stadium.FlashLed(color, quick ? 0.8f : 1.4f);
+        stadium.Cheer(quick ? 0.5f : 0.8f);
+        yield return hud.PlaySkillCutIn(isPlayer1, unit.skill.skillName, caption, color, quick ? 0.45f : 0.7f);
+    }
+
     /// <summary>戦闘開始時に発動するスキル(守護結界・威圧)。</summary>
     private IEnumerator ApplyBattleStartSkills(CharacterStats unit, CharacterStats opponent)
     {
@@ -1134,6 +1226,7 @@ public class BattleManager : MonoBehaviour
         if (unit.HasSkill(SkillType.Shield))
         {
             unit.shieldHp = Mathf.Max(1, Mathf.RoundToInt(unit.defense * unit.skill.EffectRatio));
+            yield return PlaySkillActivation(unit, $"{unit.shieldHp} ダメージまで防ぐ結界を張った！");
             if (fighter != null) StadiumKit.Shockwave(fighter.Home, OrisamoUI.DefenseColor, 6f);
             OrisamoAudio.Play(OrisamoAudio.Sfx.Guard);
             yield return ShowMessage($"{unit.characterName} の「守護結界」！　{unit.shieldHp} ダメージまで防ぐ結界を張った");
@@ -1142,9 +1235,15 @@ public class BattleManager : MonoBehaviour
         {
             int down = Mathf.Max(1, Mathf.RoundToInt(unit.attack * unit.skill.EffectRatio));
             opponent.defenseDebuff = down;
+            yield return PlaySkillActivation(unit, $"{opponent.characterName} の防御力を {down} 下げた！");
             if (fighter != null) StadiumKit.Shockwave(fighter.Home, new Color(0.75f, 0.3f, 0.9f), 6f);
             stadium.Cheer(0.6f);
             yield return ShowMessage($"{unit.characterName} の「威圧」！　{opponent.characterName} の防御力が {down} 下がった");
+        }
+        else
+        {
+            // そのほかのスキルは、試合の最初に「何ができるか」を紹介だけしておく
+            yield return PlaySkillActivation(unit, unit.skill.GetDescription(), true);
         }
     }
 
@@ -1153,10 +1252,12 @@ public class BattleManager : MonoBehaviour
     {
         if (!unit.HasSkill(SkillType.Regeneration) || unit.hp >= unit.maxHp) yield break;
         int heal = Mathf.Min(unit.maxHp - unit.hp, Mathf.Max(1, Mathf.RoundToInt(unit.defense * unit.skill.EffectRatio)));
+        yield return PlaySkillActivation(unit, $"ひと息ついて HP {heal} 回復", true);
         unit.hp += heal;
         hud.SetHp(unit == player1, unit.hp, unit.maxHp);
         Fighter3D fighter = FighterOf(unit);
         if (fighter != null) StadiumKit.Burst(fighter.ChestPoint, new Color(0.4f, 1f, 0.5f), 30, 4f);
+        stadiumCamera.Broadcast(0.6f);
         yield return ShowMessage($"{unit.characterName} の「自然治癒」！　HPが {heal} 回復した");
     }
 
@@ -1164,25 +1265,31 @@ public class BattleManager : MonoBehaviour
     /// 命中時にダメージを増減させるスキル(属性の極み・先手必勝・見切り)を適用する。
     /// ダメージメッセージの頭に付ける一言(発動したスキル名)を返す。
     /// </summary>
-    private static string ApplyDamageSkills(CharacterStats attacker, CharacterStats defender, float elementMultiplier, ref int damage)
+    private static string ApplyDamageSkills(CharacterStats attacker, CharacterStats defender, float elementMultiplier, ref int damage,
+        out string attackerSkillCaption, out bool evaded)
     {
         float multiplier = 1f;
         string note = "";
-        if (attacker.HasSkill(SkillType.ElementMastery) && elementMultiplier > 1f)
+        attackerSkillCaption = null;
+        evaded = false;
+        if (attacker.HasSkill(SkillType.ElementMastery) && elementMultiplier >= 1f)
         {
             multiplier *= 1f + attacker.skill.EffectRatio;
             note += "【属性の極み】";
+            attackerSkillCaption = $"属性の力で　ダメージ {Mathf.RoundToInt(attacker.skill.EffectRatio * 100)}% アップ";
         }
         if (attacker.HasSkill(SkillType.FirstStrike) && !attacker.firstStrikeUsed)
         {
             attacker.firstStrikeUsed = true;
             multiplier *= 1f + attacker.skill.EffectRatio;
             note += "【先手必勝】";
+            attackerSkillCaption = $"最初の一撃！　ダメージ {Mathf.RoundToInt(attacker.skill.EffectRatio * 100)}% アップ";
         }
         if (defender.HasSkill(SkillType.Evasion) && defender.speed > attacker.speed)
         {
             multiplier *= 1f - defender.skill.EffectRatio;
             note += "【見切り】";
+            evaded = true;
         }
         if (!Mathf.Approximately(multiplier, 1f)) damage = Mathf.Max(1, Mathf.RoundToInt(damage * multiplier));
         return note;

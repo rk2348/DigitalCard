@@ -731,6 +731,71 @@ public sealed class BattleHud : MonoBehaviour
         return token;
     }
 
+    /// <summary>
+    /// スキル発動のカットイン。発動したキャラクターの側から、斜めの帯が飛び込んでくる。
+    /// 帯にはスキル名(金色)と、何が起きたかの一言を出す。
+    /// </summary>
+    public IEnumerator PlaySkillCutIn(bool player1, string skillName, string caption, Color color, float hold = 0.6f)
+    {
+        float side = player1 ? -1f : 1f;
+        RectTransform root = OrisamoUI.CreateRect("SkillCutIn", overlayLayer);
+        Vector2 target = new Vector2(side * 650f, -60f);
+        OrisamoUI.PlaceCenter(root, target, new Vector2(2300f, 340f));
+        root.localRotation = Quaternion.Euler(0f, 0f, -side * 5f);
+
+        Image glow = OrisamoUI.CreateImage("Glow", root, OrisamoUI.SoftGlow, OrisamoUI.WithAlpha(color, 0.6f));
+        OrisamoUI.PlaceCenter(glow.rectTransform, Vector2.zero, new Vector2(3000f, 900f));
+        Image band = OrisamoUI.CreateImage("Band", root, OrisamoUI.RoundedFlat, new Color(0.03f, 0.02f, 0.07f, 0.92f), true);
+        OrisamoUI.Stretch(band.rectTransform);
+        foreach (float y in new[] { 0f, 1f })
+        {
+            Image edge = OrisamoUI.CreateImage("Edge", root, OrisamoUI.RoundedFlat, color, true);
+            edge.rectTransform.anchorMin = new Vector2(0f, y);
+            edge.rectTransform.anchorMax = new Vector2(1f, y);
+            edge.rectTransform.sizeDelta = new Vector2(0f, 14f);
+            edge.rectTransform.anchoredPosition = Vector2.zero;
+        }
+        Image stripe = OrisamoUI.CreateImage("Stripe", root, OrisamoUI.RoundedFlat, color, true);
+        OrisamoUI.Place(stripe.rectTransform, new Vector2(player1 ? 0f : 1f, 0.5f), new Vector2(side * -30f, 0f), new Vector2(60f, 340f));
+
+        TextMeshProUGUI label = OrisamoUI.CreateText("Label", root, "SKILL", 52f, color, TextAlignmentOptions.Center, FontStyles.Bold);
+        label.characterSpacing = 24f;
+        OrisamoUI.PlaceCenter(label.rectTransform, new Vector2(0f, 120f), new Vector2(2000f, 70f));
+        TextMeshProUGUI title = OrisamoUI.CreateText("Name", root, skillName, 150f, Color.white, TextAlignmentOptions.Center, FontStyles.Bold);
+        OrisamoUI.PlaceCenter(title.rectTransform, new Vector2(0f, 15f), new Vector2(2100f, 180f));
+        title.enableAutoSizing = true;
+        title.fontSizeMin = 80f;
+        title.fontSizeMax = 150f;
+        OrisamoUI.ApplyGoldGradient(title);
+        OrisamoUI.ApplyOutline(title, new Color(0.2f, 0.06f, 0.02f, 1f), 0.2f, new Color(0f, 0f, 0f, 0.8f), 1.5f);
+        if (!string.IsNullOrEmpty(caption))
+        {
+            TextMeshProUGUI sub = OrisamoUI.CreateText("Caption", root, caption, 58f, OrisamoUI.Parchment, TextAlignmentOptions.Center, FontStyles.Bold);
+            OrisamoUI.PlaceCenter(sub.rectTransform, new Vector2(0f, -112f), new Vector2(2100f, 80f));
+            sub.enableAutoSizing = true;
+            sub.fontSizeMin = 36f;
+            sub.fontSizeMax = 58f;
+        }
+
+        Vector2 from = target + new Vector2(side * 3600f, 0f);
+        for (float t = 0f; t < 0.22f; t += Time.deltaTime)
+        {
+            root.anchoredPosition = Vector2.LerpUnclamped(from, target, OrisamoUI.EaseOutBack(t / 0.22f));
+            yield return null;
+        }
+        root.anchoredPosition = target;
+        StartCoroutine(PunchScale(root, 0.25f, 0.12f));
+        yield return new WaitForSeconds(hold);
+        Vector2 to = target - new Vector2(side * 3600f, 0f);
+        for (float t = 0f; t < 0.18f; t += Time.deltaTime)
+        {
+            float p = t / 0.18f;
+            root.anchoredPosition = Vector2.Lerp(target, to, p * p);
+            yield return null;
+        }
+        Destroy(root.gameObject);
+    }
+
     /// <summary>画面を横切る帯の演出(必殺技名・決着など)。</summary>
     public IEnumerator PlayBanner(string title, string subtitle, Color color, float hold = 0.9f)
     {
