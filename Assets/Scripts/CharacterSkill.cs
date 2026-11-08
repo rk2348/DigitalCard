@@ -94,7 +94,7 @@ public class CharacterSkill
                 case SkillType.FirstStrike: return ratio * 2.6f;     // 52〜130%アップ(1回限り)
                 case SkillType.Evasion: return ratio * 0.95f;        // 19〜48%軽減
                 case SkillType.Counter: return ratio * 0.6f;         // 受けたダメージの12〜30%
-                case SkillType.Shield: return ratio * 2f;            // 防御力の40〜100%(1回の攻撃で半分まで防ぐ)
+                case SkillType.Shield: return ratio * 2.7f;          // 防御力の54〜135%(1回の攻撃で半分まで防ぐ)
                 case SkillType.Regeneration: return ratio * 0.4f;    // 防御力の8〜20%
                 case SkillType.Intimidate: return ratio * 0.66f;     // 攻撃力の13〜33%
                 case SkillType.Endurance: return ratio * 0.18f;      // 最大HPの4〜9%

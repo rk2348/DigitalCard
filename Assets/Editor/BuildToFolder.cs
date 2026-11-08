@@ -16,6 +16,9 @@ public static class BuildToFolder
     [MenuItem("オリサモ/ビルド/Build_4 にビルド")]
     public static void BuildToBuild4() => Build("Build_4");
 
+    [MenuItem("オリサモ/ビルド/Build_5 にビルド")]
+    public static void BuildToBuild5() => Build("Build_5");
+
     private static void Build(string FolderName)
     {
         string projectRoot = Path.GetDirectoryName(Application.dataPath);

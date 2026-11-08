@@ -94,7 +94,7 @@ const SKILL_NAME_MAP = {
 const SKILL_EFFECT_SCALE = {
   // 対戦シミュレーションで、どのスキルも勝率がほぼ50%になるよう調整した倍率(C#の EffectRatio と同じ)
   PowerBoost: 0.6, GuardBoost: 1.1, LifeDrain: 2, Overdrive: 1.2, IronFist: 0.4, Desperation: 0.16, ElementMastery: 0.66,
-  FirstStrike: 2.6, Evasion: 0.95, Counter: 0.6, Shield: 2, Regeneration: 0.4, Intimidate: 0.66, Endurance: 0.18,
+  FirstStrike: 2.6, Evasion: 0.95, Counter: 0.6, Shield: 2.7, Regeneration: 0.4, Intimidate: 0.66, Endurance: 0.18,
 };
 function skillEffectRatio(skillType, ratio) {
   return ratio * (SKILL_EFFECT_SCALE[skillType] ?? 1);
