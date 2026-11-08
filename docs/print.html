@@ -13,7 +13,7 @@
   />
   <!-- カードの見た目はスマホのページと同じものを使う -->
   <link rel="stylesheet" href="style.css?v=0.7.6-qr" />
-  <link rel="stylesheet" href="print.css?v=1" />
+  <link rel="stylesheet" href="print.css?v=2" />
 </head>
 <body class="print-site">
   <header class="ps-header">
@@ -42,9 +42,9 @@
     <label class="ps-field">
       <span>印刷の大きさ</span>
       <select id="ps-layout">
-        <option value="9">A4に9枚（カードサイズ 63×88mm）</option>
+        <option value="1">A4に1枚（1枚ずつ別の紙に大きく）</option>
         <option value="4">A4に4枚（はがきくらい）</option>
-        <option value="1">A4に1枚（大きく）</option>
+        <option value="9">A4に9枚（カードサイズ 63×88mm）</option>
       </select>
     </label>
     <label class="ps-check">
@@ -71,6 +71,6 @@
   <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/12.17.1/firebase-database-compat.js"></script>
   <script src="vendor/qrcode.js"></script>
-  <script src="print.js?v=2"></script>
+  <script src="print.js?v=3"></script>
 </body>
 </html>

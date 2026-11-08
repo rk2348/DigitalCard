@@ -65,12 +65,17 @@ body.print-site { padding: 0 24px 60px; }
 .print-area { display: none; }
 @media print {
   @page { size: A4 portrait; margin: 0; }
-  html, body.print-site { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+  /* style.css の body は overflow-x: hidden なので、そのままだとChromeが1ページ分しか印刷しない(改ページが効かない)。
+     印刷の時は、はみ出しを隠さない・高さを固定しない普通のページに戻す */
+  html, body.print-site {
+    background: #fff !important; margin: 0 !important; padding: 0 !important;
+    overflow: visible !important; height: auto !important; min-height: 0 !important; position: static !important; display: block !important;
+  }
   body.print-site > :not(.print-area) { display: none !important; }
   .print-area { display: block !important; }
   .print-sheet {
-    width: 210mm; height: 297mm; display: grid; align-content: center; justify-content: center;
-    break-after: page; page-break-after: always; overflow: hidden;
+    width: 210mm; height: 296mm; display: grid; align-content: center; justify-content: center;
+    break-after: page; page-break-after: always; break-inside: avoid; page-break-inside: avoid; overflow: hidden;
   }
   .print-sheet:last-child { break-after: auto; page-break-after: auto; }
   .print-area[data-layout="9"] .print-sheet { grid-template-columns: repeat(3, 63mm); grid-auto-rows: 88mm; gap: 2mm; }
