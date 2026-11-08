@@ -1116,6 +1116,7 @@ selectionCanvas.addEventListener("pointercancel", () => {
   selectionPointer=null; selectionPoints=[]; autoCutoutBtn.disabled=true; drawSelection();
 });
 function showPhotoSelection() {
+  endRefine();
   capturedCutoutDataUrl=null;
   selectingPhoto=true;
   selectionPoints=[];
@@ -1943,6 +1944,233 @@ capturePhotoBtn.addEventListener("click", () => {
   retakePhotoBtn.style.display="inline-block";
   showPhotoSelection();
 });
+// ==================== 切り抜きの手直し(消えた所を戻す・余分な所を消す) ====================
+// ペイント3Dの「マジック選択」のように、切り抜いたあとで指でなぞって手直しできる。
+// なぞった所とつながっている「まとまり」が小さければ(白目・水玉・小さな部品など)まとめて戻す/消す。
+// 大きなまとまり(背景など)のときは、なぞった所と、そのすぐ周りの「なぞった所と同じような色」の部分だけを戻す/消す。
+const refineToolsEl = document.getElementById("refine-tools");
+const refineAddBtn = document.getElementById("refine-add-btn");
+const refineEraseBtn = document.getElementById("refine-erase-btn");
+const refineUndoBtn = document.getElementById("refine-undo-btn");
+let refine = null; // { w, h, rgba, alpha, base(元の写真), mode, history, paperColor }
+let refinePointer = null, refineStroke = [], refineTmp = null;
+
+function startRefine(canvas, originalImageData, paperColor) {
+  const w = canvas.width, h = canvas.height;
+  const data = canvas.getContext("2d").getImageData(0, 0, w, h).data;
+  const base = document.createElement("canvas");
+  base.width = w; base.height = h;
+  base.getContext("2d").putImageData(originalImageData, 0, 0);
+  const alpha = new Uint8ClampedArray(w * h);
+  for (let i = 0; i < w * h; i++) alpha[i] = data[i * 4 + 3];
+  refine = { w, h, rgba: new Uint8ClampedArray(data), alpha, base, mode: "add", history: [], paperColor };
+  cutoutPreviewCanvasEl.width = w;
+  cutoutPreviewCanvasEl.height = h;
+  cutoutPreviewCanvasEl.classList.remove("selecting");
+  cutoutPreviewCanvasEl.classList.add("refining");
+  cutoutPreviewCanvasEl.style.display = "block";
+  refineToolsEl.style.display = "flex";
+  setRefineMode("add");
+  renderRefine();
+  commitRefine();
+}
+
+function endRefine() {
+  refine = null;
+  refinePointer = null;
+  refineStroke = [];
+  refineToolsEl.style.display = "none";
+  cutoutPreviewCanvasEl.classList.remove("refining");
+}
+
+function setRefineMode(mode) {
+  if (!refine) return;
+  refine.mode = mode;
+  refineAddBtn.classList.toggle("active", mode === "add");
+  refineEraseBtn.classList.toggle("active", mode === "erase");
+  refineUndoBtn.disabled = !refine.history.length;
+}
+
+function refineBrush() {
+  return Math.max(6, Math.round(Math.min(refine.w, refine.h) * 0.03));
+}
+
+/// 手直し中の表示: 元の写真をうっすら(消えている所が分かるように)、その上に切り抜いた絵を重ねる
+function renderRefine(stroke) {
+  const { w, h } = refine;
+  const ctx = cutoutPreviewCanvasEl.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalAlpha = 0.28;
+  ctx.drawImage(refine.base, 0, 0);
+  ctx.globalAlpha = 1;
+  if (!refineTmp) refineTmp = document.createElement("canvas");
+  if (refineTmp.width !== w || refineTmp.height !== h) { refineTmp.width = w; refineTmp.height = h; }
+  const image = new ImageData(w, h);
+  image.data.set(refine.rgba);
+  for (let i = 0; i < w * h; i++) image.data[i * 4 + 3] = refine.alpha[i];
+  refineTmp.getContext("2d").putImageData(image, 0, 0);
+  ctx.drawImage(refineTmp, 0, 0);
+  if (stroke && stroke.length) {
+    ctx.strokeStyle = refine.mode === "add" ? "rgba(110,255,150,0.65)" : "rgba(255,90,90,0.65)";
+    ctx.lineWidth = refineBrush() * 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    stroke.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    if (stroke.length === 1) ctx.lineTo(stroke[0].x + 0.1, stroke[0].y);
+    ctx.stroke();
+  }
+}
+
+/// 手直しの結果を、カードに使う写真(capturedCutoutDataUrl)と属性に反映する
+function commitRefine() {
+  const { w, h } = refine;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const image = new ImageData(w, h);
+  image.data.set(refine.rgba);
+  for (let i = 0; i < w * h; i++) image.data[i * 4 + 3] = refine.alpha[i];
+  canvas.getContext("2d").putImageData(image, 0, 0);
+  const trimmed = trimTransparentMargins(canvas);
+  capturedCutoutDataUrl = resizeCanvasToDataUrl(trimmed, 500);
+  capturedColorElement = { url: capturedCutoutDataUrl, element: elementFromCanvas(trimmed, refine.paperColor) };
+  refineUndoBtn.disabled = !refine.history.length;
+}
+
+function refinePoint(e) {
+  const r = cutoutPreviewCanvasEl.getBoundingClientRect();
+  const s = Math.min(r.width / refine.w, r.height / refine.h); // object-fit: contain の余白を考える
+  const ox = (r.width - refine.w * s) / 2, oy = (r.height - refine.h * s) / 2;
+  return { x: (e.clientX - r.left - ox) / s, y: (e.clientY - r.top - oy) / s };
+}
+
+/// なぞった線を使って、戻す(add)/消す(erase)
+function applyRefineStroke(stroke) {
+  const { w, h, alpha, rgba } = refine;
+  const count = w * h, r = refineBrush(), add = refine.mode === "add";
+  const brushed = new Uint8Array(count);
+  let any = false;
+  for (let k = 0; k < stroke.length; k++) {
+    const a = stroke[k], b = stroke[Math.min(k + 1, stroke.length - 1)];
+    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / Math.max(1, r / 2)));
+    for (let s = 0; s <= steps; s++) {
+      const cx = a.x + ((b.x - a.x) * s) / steps, cy = a.y + ((b.y - a.y) * s) / steps;
+      for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(h - 1, Math.ceil(cy + r)); y++)
+        for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(w - 1, Math.ceil(cx + r)); x++)
+          if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) { brushed[y * w + x] = 1; any = true; }
+    }
+  }
+  if (!any) return false;
+  const isTarget = add ? (i) => alpha[i] < 128 : (i) => alpha[i] >= 128;
+  let touched = false;
+  for (let i = 0; i < count && !touched; i++) if (brushed[i] && isTarget(i)) touched = true;
+  if (!touched) return false;
+  refine.history.push(new Uint8ClampedArray(alpha));
+  if (refine.history.length > 20) refine.history.shift();
+
+  // なぞった線からの距離(近似)。大きなまとまりのときに「線のすぐ周り」だけを対象にするため
+  const dist = new Float32Array(count).fill(1e9);
+  for (let i = 0; i < count; i++) if (brushed[i]) dist[i] = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (x) dist[i] = Math.min(dist[i], dist[i - 1] + 1);
+    if (y) dist[i] = Math.min(dist[i], dist[i - w] + 1);
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const i = y * w + x;
+    if (x < w - 1) dist[i] = Math.min(dist[i], dist[i + 1] + 1);
+    if (y < h - 1) dist[i] = Math.min(dist[i], dist[i + w] + 1);
+  }
+
+  let totalTarget = 0;
+  for (let i = 0; i < count; i++) if (isTarget(i)) totalTarget++;
+  const seen = new Uint8Array(count), queue = new Int32Array(count);
+  const value = add ? 255 : 0;
+  for (let start = 0; start < count; start++) {
+    if (!brushed[start] || !isTarget(start) || seen[start]) continue;
+    let head = 0, tail = 1, touchesEdge = false;
+    queue[0] = start; seen[start] = 1;
+    while (head < tail) {
+      const i = queue[head++], x = i % w, y = (i - x) / w;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesEdge = true;
+      if (x > 0 && !seen[i - 1] && isTarget(i - 1)) { seen[i - 1] = 1; queue[tail++] = i - 1; }
+      if (x < w - 1 && !seen[i + 1] && isTarget(i + 1)) { seen[i + 1] = 1; queue[tail++] = i + 1; }
+      if (y > 0 && !seen[i - w] && isTarget(i - w)) { seen[i - w] = 1; queue[tail++] = i - w; }
+      if (y < h - 1 && !seen[i + w] && isTarget(i + w)) { seen[i + w] = 1; queue[tail++] = i + w; }
+    }
+    // 小さなまとまり(囲まれた穴・離れた部品など)は、まるごと戻す/消す
+    const small = tail <= totalTarget * 0.25 && tail <= count * 0.12 && !(add && touchesEdge);
+    if (small) {
+      for (let k = 0; k < tail; k++) alpha[queue[k]] = value;
+      continue;
+    }
+    // 大きなまとまり: なぞった所 ＋ 線の近く(ブラシの2.5倍以内)で、なぞった所と似た色の画素
+    let sr = 0, sg = 0, sb = 0, n = 0;
+    for (let k = 0; k < tail; k++) {
+      const i = queue[k];
+      if (!brushed[i]) continue;
+      sr += rgba[i * 4]; sg += rgba[i * 4 + 1]; sb += rgba[i * 4 + 2]; n++;
+    }
+    sr /= n; sg /= n; sb /= n;
+    const reach = r * 2.5;
+    for (let k = 0; k < tail; k++) {
+      const i = queue[k];
+      if (brushed[i]) { alpha[i] = value; continue; }
+      if (dist[i] > reach) continue;
+      const dr = rgba[i * 4] - sr, dg = rgba[i * 4 + 1] - sg, db = rgba[i * 4 + 2] - sb;
+      if (dr * dr + dg * dg + db * db < 38 * 38) alpha[i] = value;
+    }
+  }
+  return true;
+}
+
+cutoutPreviewCanvasEl.addEventListener("pointerdown", (e) => {
+  if (!refine || refinePointer !== null) return;
+  e.preventDefault();
+  refinePointer = e.pointerId;
+  cutoutPreviewCanvasEl.setPointerCapture(e.pointerId);
+  refineStroke = [refinePoint(e)];
+  renderRefine(refineStroke);
+});
+cutoutPreviewCanvasEl.addEventListener("pointermove", (e) => {
+  if (!refine || e.pointerId !== refinePointer) return;
+  const p = refinePoint(e), last = refineStroke[refineStroke.length - 1];
+  if (Math.hypot(p.x - last.x, p.y - last.y) < 2) return;
+  refineStroke.push(p);
+  renderRefine(refineStroke);
+});
+cutoutPreviewCanvasEl.addEventListener("pointerup", (e) => {
+  if (!refine || e.pointerId !== refinePointer) return;
+  refinePointer = null;
+  const changed = applyRefineStroke(refineStroke);
+  refineStroke = [];
+  renderRefine();
+  if (changed) {
+    commitRefine();
+    setStatus(refine.mode === "add" ? "なぞった所を戻しました。うまくいかない時は「1つ戻す」でやり直せます" : "なぞった所を消しました。うまくいかない時は「1つ戻す」でやり直せます");
+  }
+});
+cutoutPreviewCanvasEl.addEventListener("pointercancel", () => {
+  refinePointer = null;
+  refineStroke = [];
+  if (refine) renderRefine();
+});
+refineAddBtn.addEventListener("click", () => {
+  setRefineMode("add");
+  setStatus("消えてしまった所を指でなぞると、その部分を元に戻します");
+});
+refineEraseBtn.addEventListener("click", () => {
+  setRefineMode("erase");
+  setStatus("残ってしまった余分な所を指でなぞると、その部分を消します");
+});
+refineUndoBtn.addEventListener("click", () => {
+  if (!refine || !refine.history.length) return;
+  refine.alpha.set(refine.history.pop());
+  renderRefine();
+  commitRefine();
+  setStatus("1つ前の状態に戻しました");
+});
+
 autoCutoutBtn.addEventListener("click", async () => {
   if(autoCutoutBtn.disabled || cutoutBusy) return;
   cutoutBusy=true;
@@ -1968,16 +2196,13 @@ autoCutoutBtn.addEventListener("click", async () => {
     ctx.globalCompositeOperation="source-over";
     const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
     if(!pixels.some((v,i)=>i%4===3 && v>128)) throw new Error("被写体が見つかりませんでした。囲みを広げて試してください");
-    const trimmed=trimTransparentMargins(canvas);
-    cutoutPreviewCanvasEl.width=trimmed.width;cutoutPreviewCanvasEl.height=trimmed.height;
-    cutoutPreviewCanvasEl.getContext("2d").drawImage(trimmed,0,0);
-    capturedCutoutDataUrl=resizeCanvasToDataUrl(trimmed,500);
-    capturedColorElement={url:capturedCutoutDataUrl,element:elementFromCanvas(trimmed,usedPaper?lastPaperColor:null)};
     resetPhotoBounds();
+    // 切り抜いたあとは手直しできる状態にする(消えた所を戻す・余分な所を消す)
+    startRefine(canvas, original, usedPaper?lastPaperColor:null);
     redrawSelectionBtn.style.display="inline-block";
     usePhotoBtn.style.display="inline-block";
     const elementNote=capturedColorElement.element?`絵の色から「${ELEMENT_LABELS[capturedColorElement.element]}」属性になります。`:"";
-    setStatus(elementNote+(usedPaper||usedAi?"「この写真を使う」で進めます":"簡易モードで切り抜きました。結果を確認してください"));
+    setStatus(elementNote+(usedPaper||usedAi?"":"簡易モードで切り抜きました。")+"消えてしまった所は指でなぞると戻せます。よければ「この写真を使う」で進めます");
   } catch(e) {
     autoCutoutBtn.disabled=false;
     setStatus(e.message || "切り抜きに失敗しました。もう一度試してください", "error");
@@ -1988,6 +2213,7 @@ autoCutoutBtn.addEventListener("click", async () => {
 
 
 retakePhotoBtn.addEventListener("click", () => {
+  endRefine();
   resetPhotoBounds();
   if (!photoStream) startPhotoCamera();
   photoVideoEl.play().catch(() => {});
@@ -2004,11 +2230,13 @@ retakePhotoBtn.addEventListener("click", () => {
 });
 
 usePhotoBtn.addEventListener("click", () => {
+  endRefine();
   stopPhotoCamera();
   showNameInput(scannedCardData);
 });
 
 skipPhotoBtn.addEventListener("click", () => {
+  endRefine();
   capturedCutoutDataUrl = null;
   stopPhotoCamera();
   showNameInput(scannedCardData);

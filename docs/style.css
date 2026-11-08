@@ -1646,3 +1646,13 @@ h1 {
   .card-print-sheet { padding: 0; width: 200mm; height: 286mm; display: flex; align-items: center; justify-content: center; break-inside: avoid; }
   .print-card { width: 200mm; height: auto; flex-shrink: 0; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
+
+/* ---------- 切り抜きの手直し(なぞって戻す・消す) ---------- */
+.photo-frame canvas#cutout-preview-canvas.refining { cursor: crosshair; touch-action: none; z-index: 3; }
+.refine-tools { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 10px 0 0; }
+.refine-tool {
+  flex: 1 1 30%; min-width: 0; padding: 10px 8px; font-size: 0.9rem; font-weight: 700;
+  color: var(--parchment); background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(247, 207, 112, 0.35); border-radius: 10px;
+}
+.refine-tool.active { color: #241606; background: linear-gradient(180deg, #ffe08a, #f2b636); border-color: #f7cf70; }
+.refine-tool.refine-undo:disabled { opacity: 0.4; }

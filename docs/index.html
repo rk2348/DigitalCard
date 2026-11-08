@@ -10,7 +10,7 @@
     href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Shippori+Antique+B1&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
     rel="stylesheet"
   />
-  <link rel="stylesheet" href="style.css?v=0.7.6-qr" />
+  <link rel="stylesheet" href="style.css?v=0.8.2-refine" />
 </head>
 <body>
   <div class="arena-backdrop"></div>
@@ -112,6 +112,12 @@
         <canvas id="selection-canvas" style="display: none;" aria-label="キャラクターの周りを指でなぞって囲む"></canvas>
       </div>
       <canvas id="photo-capture-canvas" style="display: none;"></canvas>
+      <!-- 切り抜いたあとの手直し(ペイント3Dのように、なぞって戻す・消す) -->
+      <div id="refine-tools" class="refine-tools" style="display: none;">
+        <button id="refine-add-btn" class="refine-tool active">＋ 消えた所を戻す</button>
+        <button id="refine-erase-btn" class="refine-tool">− 余分な所を消す</button>
+        <button id="refine-undo-btn" class="refine-tool refine-undo" disabled>↶ 1つ戻す</button>
+      </div>
 
       <div class="name-input-buttons">
         <button id="capture-photo-btn">撮影する</button>
@@ -182,6 +188,6 @@
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="vendor/qrcode.js"></script>
   <script src="card-print.js?v=3"></script>
-  <script src="app.js?v=0.8.1-balance"></script>
+  <script src="app.js?v=0.8.2-refine"></script>
 </body>
 </html>
