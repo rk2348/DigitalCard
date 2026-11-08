@@ -156,7 +156,8 @@ let refreshQueued = false;
 function scheduleRefresh() {
   if (refreshQueued) return;
   refreshQueued = true;
-  requestAnimationFrame(() => { refreshQueued = false; refresh(); });
+  // requestAnimationFrame だと、ブラウザが裏に回っている間は止まってしまうので setTimeout を使う
+  setTimeout(() => { refreshQueued = false; refresh(); }, 30);
 }
 
 /// 並び順(新しい順)・絞り込み・選択状態・印刷ボタンの表示をまとめて更新する
