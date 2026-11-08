@@ -2,7 +2,26 @@
 const CardPrint = (() => {
   let record = null;
   let dialog = null;
-  function setCard(value) { record = { ...value }; }
+  function setCard(value) {
+    record = { ...value };
+    attachQr(document.querySelector(".reveal-card-front"));
+  }
+
+  /// カード表面の右下のQR枠に、対戦用のQRコードを入れる(画面表示と印刷で共通)。
+  function attachQr(front) {
+    if (!front) return;
+    front.querySelectorAll(".card-qr").forEach(el => el.remove());
+    if (!record || !record.cardId || record.seed == null || typeof qrcode === "undefined") return;
+    const qr = qrcode(0, "M");
+    qr.addData(JSON.stringify({ cardId: record.cardId, seed: record.seed, dataVersion: 1 }));
+    qr.make();
+    const code = document.createElement("div");
+    code.className = "card-qr";
+    // The four-module white quiet zone is required for reliable scanning.
+    code.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 16, scalable: true });
+    code.setAttribute("aria-label", "対戦用QRコード");
+    front.append(code);
+  }
 
   async function open(front) {
     if (!record || dialog) return;
@@ -19,15 +38,7 @@ const CardPrint = (() => {
     const clone = front.cloneNode(true);
     clone.removeAttribute("id");
     clone.querySelectorAll("[id]").forEach(el => el.removeAttribute("id"));
-    const qr = qrcode(0, "M");
-    qr.addData(JSON.stringify({ cardId: record.cardId, seed: record.seed, dataVersion: 1 }));
-    qr.make();
-    const code = document.createElement("div");
-    code.className = "print-card-qr";
-    // The four-module white quiet zone is required for reliable scanning.
-    code.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 16, scalable: true });
-    code.setAttribute("aria-label", "対戦用QRコード");
-    clone.append(code);
+    attachQr(clone); // 画面のカードからコピーしたQRを作り直して、必ず1つだけにする
     card.append(clone);
     sheet.append(card);
     const actions = document.createElement("div");
