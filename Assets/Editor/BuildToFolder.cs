@@ -5,15 +5,18 @@ using UnityEditor.Build.Reporting;
 using UnityEngine;
 
 /// <summary>
-/// メニュー「オリサモ > ビルド > Build_3 にビルド」で、プロジェクト直下の Build_3 フォルダに
+/// メニュー「オリサモ > ビルド > Build_◯ にビルド」で、プロジェクト直下の Build_◯ フォルダに
 /// Windows版をビルドする(Build Settings に登録されている有効なシーンを使う)。
 /// </summary>
 public static class BuildToFolder
 {
-    private const string FolderName = "Build_3";
-
     [MenuItem("オリサモ/ビルド/Build_3 にビルド")]
-    public static void BuildToBuild3()
+    public static void BuildToBuild3() => Build("Build_3");
+
+    [MenuItem("オリサモ/ビルド/Build_4 にビルド")]
+    public static void BuildToBuild4() => Build("Build_4");
+
+    private static void Build(string FolderName)
     {
         string projectRoot = Path.GetDirectoryName(Application.dataPath);
         string folder = Path.Combine(projectRoot, FolderName);
