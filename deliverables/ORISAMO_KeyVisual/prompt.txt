@@ -1,0 +1,10 @@
+Generation mode: built-in image_gen
+
+Use case: ads-marketing
+Asset type: finished landscape 16:9 game key visual for the existing Japanese game ORISAMO (オリジナルサモナー).
+Primary request: A beautiful polished promotional illustration communicating that your handmade drawing becomes your own summoned battle companion. Match this project's dark navy and antique gold identity.
+Scene: a luminous circular fantasy stadium, elegant concentric gold summoning rings on stone, distant crowd and a deep midnight-blue atmosphere. In the foreground a physical illustrated character card tilts toward the viewer; a flowing arc of golden drawing strokes and luminous particles connects the hand-drawn red creature on the card to its living summoned counterpart.
+Subjects: two original friendly toy-like creatures, a small coral-red upright dragon with cream oval belly, two little horns, big round kind eyes, tiny arms, rounded feet and a curved tail; and a small sky-blue water creature with similarly charming round proportions, pale blue belly, two ear-like points, large friendly eyes, rounded paws and tail. Dynamic confident poses, red companion prominent center-left and blue companion center-right. They feel like lovingly made children's original creations brought to life, premium soft 3D illustration with subtle handmade texture. Clear readable silhouettes, rich depth, cinematic rim light, warm gold against cool blue. Beautiful expressive faces, joyful wonder and friendly competitive energy.
+Composition: professional single coherent poster, wide 16:9, generous safe margins. Characters and card in lower two-thirds, clean dark upper central area for title. Restrained elegant gold typography, no UI, no screenshots, no collage.
+Text (verbatim): large upper title "ORISAMO"; small subtitle immediately below "オリジナルサモナー"; graceful Japanese tagline at bottom "キミの作品が、主役になる。"
+Constraints: render exactly these three text elements with accurate Japanese glyphs. No additional text, no invented release dates, no watermarks, no other brand logos, no QR code. Main title exceptionally legible. High quality finished key art, 2560x1440 if available.

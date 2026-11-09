@@ -1,0 +1,4 @@
+90秒 / 1280×720 / 30fps / H.264 Main + AAC
+ゲーム映像と文字アニメーションは通常速度。15fpsのゲーム素材を30fpsで出力。Web操作は通常速度で再収録し、各工程の末尾を静止表示。撮影画像は元画像の縦横比を保持。
+最大映像ビットレート2.5Mbps、2秒ごとのキーフレーム、faststart。
+再制作: node tools/capture_web_demo.cjs → node tools/make_animated_intro.cjs --90
